@@ -1,0 +1,11 @@
+[Unit]
+Description=LabDoctorM Artifact Provenance — ежедневно в 04:00
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+RandomizedDelaySec=600
+FixedRandomDelay=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,27 @@
+# Artifact Pulse — конфигурация путей
+# Укажи корневую папку лаборатории, остальное вычисляется автоматически
+
+lab_dir: /root/LabDoctorM
+
+# Папки с артефактами (относительно lab_dir)
+artifact_dirs:
+  pattern: patterns
+  adr: adr
+  rule: rules
+  spec: specs
+  backlog: specs
+  incident: incidents
+  metric: metrics
+
+# Файлы состояния (относительно lab_dir)
+state_files:
+  insights_queue: .qwen/artifacts/insights_queue.json
+  search_index: .qwen/artifacts/search_index.json
+  artifact_stats: .qwen/artifacts/artifact_stats.json
+  health_history: .qwen/artifacts/health_history.jsonl
+  alerts: .qwen/artifacts/alerts.json
+  trends: .qwen/artifacts/trends.json
+  changelog: ARTIFACT_CHANGELOG.md
+
+# Шаблоны для автогенерации
+templates_dir: projects/artifact-pulse/templates

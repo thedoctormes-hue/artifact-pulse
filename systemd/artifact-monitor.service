@@ -1,0 +1,16 @@
+[Unit]
+Description=LabDoctorM Artifact Monitor — тренды, алерты, health history
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/mkdir -p /root/LabDoctorM/.qwen/artifacts
+ExecStart=/bin/bash -c 'cd /root/LabDoctorM/projects/artifact-pulse && python3 artifact_monitor.py --check 2>&1'
+User=root
+WorkingDirectory=/root/LabDoctorM
+StandardOutput=journal
+StandardError=journal
+TimeoutSec=180
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=LabDoctorM Artifact Stats — каждые 12 часов
+
+[Timer]
+OnCalendar=*-*-* 01,13:20:00
+Persistent=true
+RandomizedDelaySec=300
+FixedRandomDelay=true
+
+[Install]
+WantedBy=timers.target

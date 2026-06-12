@@ -1,0 +1,16 @@
+[Unit]
+Description=LabDoctorM Search Index Rebuild — пересборка полнотекстового индекса
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/mkdir -p /root/LabDoctorM/.qwen/artifacts
+ExecStart=/bin/bash -c 'cd /root/LabDoctorM/projects/artifact-pulse && python3 -c "from search_artifacts import build_index; build_index()" 2>&1'
+User=root
+WorkingDirectory=/root/LabDoctorM
+StandardOutput=journal
+StandardError=journal
+TimeoutSec=120
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=LabDoctorM Artifact Audit
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /root/LabDoctorM/.qwen/scripts/artifact_audit.sh
+User=root
+WorkingDirectory=/root/LabDoctorM
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

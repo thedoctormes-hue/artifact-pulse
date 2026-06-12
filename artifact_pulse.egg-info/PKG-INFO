@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: artifact-pulse
+Version: 4.0.0
+Summary: Система мониторинга здоровья артефактов LabDoctorM
+Requires-Python: >=3.10
+Requires-Dist: pyyaml>=6.0

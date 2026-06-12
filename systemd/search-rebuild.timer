@@ -1,0 +1,11 @@
+[Unit]
+Description=LabDoctorM Search Index Rebuild — каждые 6 часов
+
+[Timer]
+OnCalendar=*-*-* 02,08,14,20:25:00
+Persistent=true
+RandomizedDelaySec=300
+FixedRandomDelay=true
+
+[Install]
+WantedBy=timers.target
