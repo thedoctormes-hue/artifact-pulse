@@ -27,6 +27,8 @@ from artifact_constants import (
     REF_PATTERN,
     ALL_VALID_STATUSES,
     REQUIRED_FIELDS,
+    DEFAULT_STALE_DAYS,
+    DEFAULT_ARCHIVE_DAYS,
 )
 
 LAB_DIR = get_lab_dir()
@@ -144,8 +146,8 @@ def check_links(artifacts: dict) -> dict:
 def check_aging(artifacts: dict) -> dict:
     """Check for stale artifacts."""
     now = datetime.now(timezone.utc)
-    stale_days = 90
-    archive_days = 180
+    stale_days = DEFAULT_STALE_DAYS
+    archive_days = DEFAULT_ARCHIVE_DAYS
 
     stale = []
     needs_archive = []

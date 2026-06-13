@@ -90,6 +90,7 @@ def verify_artifact(artifact_id: str) -> dict:
     in_frontmatter = False
     had_last_verified = False
     had_confidence = False
+    had_updated = False
 
     for i, line in enumerate(lines):
         if i == 0 and line.strip() == "---":
@@ -104,6 +105,9 @@ def verify_artifact(artifact_id: str) -> dict:
             if not had_confidence:
                 new_lines.append("confidence: high")
                 had_confidence = True
+            if not had_updated:
+                new_lines.append(f"updated: {now}")
+                had_updated = True
             new_lines.append(line)
             continue
         if in_frontmatter:
@@ -114,7 +118,8 @@ def verify_artifact(artifact_id: str) -> dict:
                 new_lines.append("confidence: high")
                 had_confidence = True
             elif line.startswith("updated:"):
-                new_lines.append(line)
+                new_lines.append(f"updated: {now}")
+                had_updated = True
             else:
                 new_lines.append(line)
         else:

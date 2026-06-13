@@ -15,7 +15,7 @@ Usage:
 
 import re
 from pathlib import Path
-from artifact_core import parse_frontmatter, read_text_safe
+from artifact_core import parse_frontmatter, read_text_safe, validate_frontmatter
 from artifact_constants import (
     VALID_STATUSES,
     TYPE_PREFIX,
@@ -26,26 +26,8 @@ VALID_TYPES = list(TYPE_PREFIX.keys())
 
 
 def validate(fm, encoding="utf-8", fpath=None):
-    errors = []
-    warnings = []
-
-    # Encoding check
-    if encoding not in ("utf-8", "utf-8-sig"):
-        warnings.append(f"file encoding is '{encoding}', expected utf-8")
-
-    for f in REQUIRED_FIELDS:
-        if f not in fm or fm[f] is None or str(fm[f]).strip() == "":
-            errors.append(f"missing required field: {f}")
-    aid = str(fm.get("id", ""))
-    atype = str(fm.get("type", ""))
-    prefix = TYPE_PREFIX.get(atype, "")
-    if aid and prefix and not re.match(rf"^{prefix}-\d{{3,4}}$", aid):
-        errors.append(f"id '{aid}' doesn't match expected format '{prefix}-NNN'")
-    valid = VALID_STATUSES.get(atype, [])
-    status = str(fm.get("status", ""))
-    if valid and status not in valid:
-        errors.append(f"status '{status}' not valid for type '{atype}'. Valid: {valid}")
-    return errors, warnings
+    """Обёртка над validate_frontmatter() для обратной совместимости."""
+    return validate_frontmatter(fm, encoding=encoding, fpath=fpath)
 
 
 def fix_frontmatter(fm: dict, content: str, fpath: Path) -> tuple[bool, list[str]]:

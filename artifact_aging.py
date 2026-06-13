@@ -33,10 +33,10 @@ def load_all_artifacts() -> dict:
     return _canonical_load_all(ARTIFACT_DIRS, LAB_DIR)
 
 
-def count_inbound_links(artifacts: dict[str, dict]) -> dict[str, int]:
+def count_inbound_links(artifacts: dict) -> dict[str, int]:
     inbound = {aid: 0 for aid in artifacts}
     for aid, art in artifacts.items():
-        body = art.body if hasattr(art, "body") else art.get("_body", "")
+        body = art.body if hasattr(art, "body") else art.get("body", art.get("_body", ""))
         refs = set(REF_PATTERN.findall(body))
         refs.discard(aid)
         for ref in refs:
@@ -49,7 +49,7 @@ def get_inbound_sources(artifacts: dict[str, dict]) -> dict[str, list[str]]:
     """Return mapping: artifact_id → list of IDs that reference it."""
     sources: dict[str, list[str]] = {aid: [] for aid in artifacts}
     for aid, art in artifacts.items():
-        body = art.body if hasattr(art, "body") else art.get("_body", "")
+        body = art.body if hasattr(art, "body") else art.get("body", art.get("_body", ""))
         refs = set(REF_PATTERN.findall(body))
         refs.discard(aid)
         for ref in refs:
@@ -171,15 +171,21 @@ def run_aging(dry_run: bool, stale_days: int, archive_days: int) -> dict:
                 results["archived"] += 1
 
             if not dry_run:
-                # Обновляем статус во frontmatter
+                # Обновляем статус только во frontmatter (между --- и ---)
                 content = fpath.read_text(encoding="utf-8", errors="replace")
                 new_status = action
-                content = re.sub(
-                    r"^status:.*$",
-                    f"status: {new_status}",
-                    content,
-                    flags=re.MULTILINE,
-                )
+                # Заменяем status только в первом блоке frontmatter
+                fm_match = re.match(r"^(---\s*\n)(.*?)(---)", content, re.DOTALL)
+                if fm_match:
+                    fm_body = fm_match.group(2)
+                    new_fm_body = re.sub(
+                        r"^status:.*$",
+                        f"status: {new_status}",
+                        fm_body,
+                        count=1,
+                        flags=re.MULTILINE,
+                    )
+                    content = fm_match.group(1) + new_fm_body + fm_match.group(3) + content[fm_match.end():]
                 # Добавляем запись об изменении статуса
                 aging_note = f"\n\n## Автоматическое старение\nСтатус изменён на `{new_status}` {now.strftime('%Y-%m-%d')}: "
                 if action == "stale":

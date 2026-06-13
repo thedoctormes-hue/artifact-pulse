@@ -4,8 +4,10 @@
 - parse_frontmatter() — парсинг YAML frontmatter из .md файлов (yaml.safe_load)
 - load_artifact_file() — загрузка одного артефакта
 - detect_encoding() / read_text_safe() — детекция кодировки
+- validate_frontmatter() — единая валидация frontmatter (используется health, normalize, audit)
 """
 
+import re
 import yaml
 from pathlib import Path
 from typing import Optional
@@ -13,6 +15,8 @@ from typing import Optional
 from artifact_constants import (
     ID_PATTERN,
     TEMPLATE_NAMES,
+    VALID_STATUSES,
+    TYPE_PREFIX,
 )
 from artifact_types import Artifact
 
@@ -100,6 +104,43 @@ def read_text_safe(fpath: Path) -> tuple:
         return fpath.read_text(encoding=enc), enc
     except (OSError, UnicodeDecodeError):
         return fpath.read_bytes().decode('latin-1', errors='replace'), 'latin-1-fallback'
+
+
+# ── Unified Validation ─────────────────────────────────────────
+
+def validate_frontmatter(fm: dict, encoding: str = "utf-8", fpath=None) -> tuple[list[str], list[str]]:
+    """Единая функция валидации frontmatter для всех модулей.
+
+    Returns (errors, warnings).
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if encoding not in ("utf-8", "utf-8-sig"):
+        warnings.append(f"file encoding is '{encoding}', expected utf-8")
+
+    aid = str(fm.get("id", ""))
+    atype = str(fm.get("type", ""))
+    status = str(fm.get("status", ""))
+
+    # Required fields
+    required = ["type", "id", "title", "status", "created", "updated"]
+    for field in required:
+        val = fm.get(field)
+        if val is None or str(val).strip() == "":
+            errors.append(f"missing required field: {field}")
+
+    # ID format
+    prefix = TYPE_PREFIX.get(atype, "")
+    if aid and prefix and not re.match(rf"^{re.escape(prefix)}-\d{{3,4}}$", aid):
+        errors.append(f"id '{aid}' doesn't match expected format '{prefix}-NNN'")
+
+    # Status validity
+    valid = VALID_STATUSES.get(atype, [])
+    if valid and status not in valid:
+        errors.append(f"status '{status}' not valid for type '{atype}'. Valid: {valid}")
+
+    return errors, warnings
 
 
 # ── File loading ───────────────────────────────────────────────

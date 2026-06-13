@@ -25,10 +25,9 @@ from config_loader import get_lab_dir, get_state_file
 from artifact_health import (
     load_all_artifacts, check_frontmatter, check_links, check_aging,
     check_duplicates, check_code_refs, check_insights_queue,
-    check_infrastructure, compute_overall_score,
+    check_infrastructure, check_provenance_dimension, check_constraints_dimension,
+    compute_overall_score,
 )
-from artifact_provenance import generate_report as provenance_report
-from artifact_constraints import run_all_checks as constraint_checks
 from artifact_constants import (
     ALERT_WARN_SCORE,
     ALERT_CRIT_SCORE,
@@ -55,30 +54,26 @@ def run_health_snapshot() -> dict:
         "aging": check_aging(artifacts),
         "duplicates": check_duplicates(artifacts),
         "code_refs": check_code_refs(artifacts),
+        "provenance": check_provenance_dimension(artifacts),
+        "constraints": check_constraints_dimension(artifacts),
         "insights": check_insights_queue(),
         "infrastructure": check_infrastructure(),
     }
     overall = compute_overall_score(checks)
 
-    # Provenance (reuse already-loaded artifacts)
-    prov_report = provenance_report(artifacts)
-
-    # Constraints (reuse already-loaded artifacts)
-    constraint_report = constraint_checks(artifacts)
-
     snapshot = {
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00"),
         "overall_score": overall,
         "checks": checks,
-        "provenance_score": prov_report.get("score", 0),
-        "constraint_score": constraint_report.get("score", 0),
+        "provenance_score": checks["provenance"]["score"],
+        "constraint_score": checks["constraints"]["score"],
         "total_artifacts": len(artifacts),
         "broken_links": checks["links"]["broken_count"],
         "orphans": checks["links"]["orphan_count"],
         "stale": checks["aging"]["stale_count"],
-        "outdated_confidence": prov_report.get("by_confidence", {}).get("outdated", 0),
-        "constraint_errors": constraint_report.get("errors", 0),
-        "constraint_warnings": constraint_report.get("warnings", 0),
+        "outdated_confidence": checks["provenance"].get("outdated_count", 0),
+        "constraint_errors": checks["constraints"]["errors"],
+        "constraint_warnings": checks["constraints"]["warnings"],
     }
 
     return snapshot
