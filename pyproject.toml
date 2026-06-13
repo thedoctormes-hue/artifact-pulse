@@ -18,8 +18,29 @@ dev = [
     "mypy>=1.0",
 ]
 
-[tool.setuptools.packages.find]
-include = []
+[tool.setuptools]
+py-modules = [
+    "artifact_health",
+    "search_artifacts",
+    "artifact_link_checker",
+    "artifact_aging",
+    "artifact_stats",
+    "artifact_monitor",
+    "artifact_provenance",
+    "artifact_constraints",
+    "artifact_graph",
+    "artifact_changelog",
+    "audit_report",
+    "normalize_frontmatter",
+    "artifact_dashboard",
+    "artifact_diff",
+    "artifact_watch",
+    "artifact_new",
+    "artifact_core",
+    "artifact_constants",
+    "artifact_types",
+    "config_loader",
+]
 
 [project.scripts]
 artifact-health = "artifact_health:main"

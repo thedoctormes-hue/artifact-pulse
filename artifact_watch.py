@@ -17,19 +17,12 @@ import sys
 import json
 import time
 import argparse
-from datetime import datetime, timezone
-from pathlib import Path
-from config_loader import get_lab_dir, get_state_file
-from artifact_health import (
-    load_all_artifacts, check_frontmatter, check_links, check_aging,
-    check_duplicates, check_code_refs, check_insights_queue,
-    check_infrastructure, check_provenance_dimension, check_constraints_dimension,
-    compute_overall_score,
-)
-from artifact_monitor import run_health_snapshot, compute_trends, check_alerts, check_alerts, load_history  # noqa: F401
-from artifact_constants import (
-    ALERT_WARN_SCORE,
-    ALERT_CRIT_SCORE,
+from config_loader import get_lab_dir
+from artifact_monitor import (
+    run_health_snapshot,
+    compute_trends,
+    check_alerts,
+    load_history,
 )
 from artifact_core import load_all_artifacts as _canonical_load_all
 
@@ -48,11 +41,9 @@ def run_watch_once(json_output: bool = False) -> int:
     """Run single health check, print alerts if any. Returns exit code."""
     snapshot = run_health_snapshot()
 
-    history_file = get_state_file("health_history") or LAB_DIR / ".qwen/artifacts/health_history.jsonl"
-    from artifact_monitor import load_history, compute_trends as _compute_trends, check_alerts as _check_alerts
     history = load_history(30)
-    trends = _compute_trends(history)
-    alerts = _check_alerts(snapshot, trends)
+    trends = compute_trends(history)
+    alerts = check_alerts(snapshot, trends)
 
     if alerts:
         if json_output:
@@ -63,6 +54,7 @@ def run_watch_once(json_output: bool = False) -> int:
             }, ensure_ascii=False, indent=2))
         else:
             score = snapshot["overall_score"]
+            from artifact_constants import ALERT_CRIT_SCORE
             emoji = "🔴" if score < ALERT_CRIT_SCORE else "🟡"
             print(f"{emoji} Health: {score}/100 | {len(alerts)} alert(s)")
             for a in alerts:

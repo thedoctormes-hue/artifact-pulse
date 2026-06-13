@@ -15,7 +15,6 @@ Usage:
 import sys
 import json
 import argparse
-from pathlib import Path
 from difflib import unified_diff
 from config_loader import get_lab_dir, get_artifact_dirs
 from artifact_core import load_all_artifacts as _canonical_load_all
