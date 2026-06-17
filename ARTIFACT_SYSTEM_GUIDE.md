@@ -178,8 +178,8 @@ python3 -m pytest tests/ -v
 
 ```
 active → stale → archived
-         ↓
-     deprecated → archived
+ ↓
+ deprecated → archived
 ```
 
 - **active** — актуален, используется
@@ -220,5 +220,84 @@ active → stale → archived
 
 ---
 
+---
+
+## Insight Catcher Pipeline — Автоматический ловец инсайтов
+
+### Что это
+
+Pipeline для автоматического сбора инсайтов из работы агентов и их превращения в артефакты. Заменяет бывшие Qwen PostToolUse hooks.
+
+### Как работает цикл
+
+```
+Агент обнаруживает инсайт (ошибка, решение, находка, паттерн)
+  → Вызывает: python3 artifact_insights.py add --content "..." --source "agent" --type "finding"
+  → Инсайт записывается в .qwen/artifacts/insights_queue.json
+  → Cron каждые 60 мин: python3 artifact_insights.py consolidate
+  → Связанные инсайты группируются, статус → consolidated
+  → Агент или Доминика создаёт артефакт из консолидированных инсайтов
+  → Артефакт проходит фактчекинг (cron еженедельно)
+  → last_verified обновляется, артефакт остаётся актуальным
+```
+
+### Типы инсайтов
+
+- **error** — ошибка/баг в коде, конфиге, документации
+- **decision** — принятое архитектурное или процессное решение
+- **finding** — результат разведки, поиска, анализа
+- **pattern** — повторяющийся паттерн в работе
+- **anti-pattern** — антипаттерн, чего не стоит делать
+- **insight** — общий инсайт, не попадающий в другие категории
+
+### Критерии хорошего инсайта
+
+- **Конкретный** — не «что-то не так», а «файл X содержит Y → Z»
+- **Воспроизводимый** — другой агент может проверить
+- **Полезный** — помогает избежать ошибки или улучшить процесс
+- **Актуальный** — относится к текущему состоянию системы
+
+### Команды
+
+```bash
+# Добавить инсайт
+python3 artifact_insights.py add \
+  --content "Описание" \
+  --source "dominika" \
+  --type "finding" \
+  --confidence "high" \
+  --context "контекст" \
+  --tags "тег1,тег2"
+
+# Список инсайтов
+python3 artifact_insights.py list --status new --limit 20
+
+# Консолидация (группировка и повышение статуса)
+python3 artifact_insights.py consolidate
+
+# Консолидация без записи (dry-run)
+python3 artifact_insights.py consolidate --dry-run
+
+# Подтвердить инсайт
+python3 artifact_insights.py verify --id INS-XXX
+
+# Статистика
+python3 artifact_insights.py stats
+```
+
+### Cron-задачи
+
+- **artifact-insights-consolidate** — каждые 60 минут, консолидирует новые инсайты
+- **artifact-factcheck** — еженедельно (понедельник 06:00 MSK), проверяет актуальность артефактов
+
+### Важно
+
+- Один инсайт = одна конкретная находка
+- Не записывать очевидное или уже задокументированное
+- При сомнениях — лучше записать, чем пропустить
+- Дубликаты отсеиваются автоматически (content + source)
+
+---
+
 *Документ живёт в `projects/artifact-pulse/ARTIFACT_SYSTEM_GUIDE.md`*
-*Обновлён: 2026-06-04*
+*Обновлён: 2026-06-17*
