@@ -10,8 +10,8 @@ Accepted
 В `rebuild_frontmatter()` генерировать block-style YAML для всех списков:
 ```yaml
 tags:
-  - item1
-  - item2
+ - item1
+ - item2
 ```
 
 Вместо inline:

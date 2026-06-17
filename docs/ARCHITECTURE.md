@@ -37,62 +37,62 @@ Artifact Pulse — система мониторинга здоровья арт
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                    CLI Entry Points (15)                      │
-│  health  search  links  aging  stats  monitor  provenance ... │
-│  constraints  graph  changelog  audit  normalize  dashboard   │
-│  diff  watch  new                                            │
+│ CLI Entry Points (15) │
+│ health search links aging stats monitor provenance ... │
+│ constraints graph changelog audit normalize dashboard │
+│ diff watch new │
 └───────────────────────────┬──────────────────────────────────┘
-                            │
+ │
 ┌───────────────────────────▼──────────────────────────────────┐
-│                      artifact_core.py                        │
-│  parse_frontmatter()  load_all_artifacts()                   │
-│  validate_frontmatter()  ← единая валидация (health/normalize)│
-│  detect_encoding()  read_text_safe()                         │
+│ artifact_core.py │
+│ parse_frontmatter() load_all_artifacts() │
+│ validate_frontmatter() ← единая валидация (health/normalize)│
+│ detect_encoding() read_text_safe() │
 └───────────────────────────┬──────────────────────────────────┘
-                            │
-     ┌──────────────────────┼──────────────────────┐
-     │                      │                      │
-┌────▼───────────┐  ┌───────▼──────────┐  ┌───────▼──────────┐
-│  Health Check  │  │   Aging          │  │  Provenance      │
-│  (9 измерений) │  │                  │  │                  │
-│ frontmatter    │  │ active→stale     │  │ confidence decay │
-│ links          │  │ →archived        │  │ last_verified    │
-│ aging          │  │ days_since()     │  │ review_due      │
-│ duplicates     │  │ count_inbound    │  │ verify_artifact()│
-│ code_refs      │  │ _links()         │  │                  │
-│ provenance     │  │ analyze_cascade()│  │                  │
-│ constraints    │  │                  │  │                  │
-│ insights       │  │                  │  │                  │
-│ infrastructure │  │                  │  │                  │
-└────────────────┘  └──────────────────┘  └──────────────────┘
+ │
+ ┌──────────────────────┼──────────────────────┐
+ │ │ │
+┌────▼───────────┐ ┌───────▼──────────┐ ┌───────▼──────────┐
+│ Health Check │ │ Aging │ │ Provenance │
+│ (9 измерений) │ │ │ │ │
+│ frontmatter │ │ active→stale │ │ confidence decay │
+│ links │ │ →archived │ │ last_verified │
+│ aging │ │ days_since() │ │ review_due │
+│ duplicates │ │ count_inbound │ │ verify_artifact()│
+│ code_refs │ │ _links() │ │ │
+│ provenance │ │ analyze_cascade()│ │ │
+│ constraints │ │ │ │ │
+│ insights │ │ │ │ │
+│ infrastructure │ │ │ │ │
+└────────────────┘ └──────────────────┘ └──────────────────┘
 
-┌────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│   Search       │  │   Monitor        │  │   Graph          │
-│                │  │                  │  │                  │
-│ build_index()  │  │ save_snapshot()  │  │ DOT / JSON /     │
-│ load_index()   │  │ load_history()   │  │ HTML (D3.js)     │
-│ _dir_finger-   │  │ compute_trends() │  │ force-directed  │
-│   print()      │  │ check_alerts()   │  │ simulation       │
-│ score_*()      │  │                  │  │                  │
-└────────────────┘  └──────────────────┘  └──────────────────┘
+┌────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+│ Search │ │ Monitor │ │ Graph │
+│ │ │ │ │ │
+│ build_index() │ │ save_snapshot() │ │ DOT / JSON / │
+│ load_index() │ │ load_history() │ │ HTML (D3.js) │
+│ _dir_finger- │ │ compute_trends() │ │ force-directed │
+│ print() │ │ check_alerts() │ │ simulation │
+│ score_*() │ │ │ │ │
+└────────────────┘ └──────────────────┘ └──────────────────┘
 
-┌────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│   Diff         │  │   Watch          │  │   New            │
-│                │  │                  │  │                  │
-│ frontmatter    │  │ --once (timer)   │  │ auto-ID          │
-│ outbound refs  │  │ --interval N     │  │ frontmatter      │
-│ inbound refs   │  │ alerts-only      │  │ yaml template     │
-│ body diff      │  │                  │  │ --dry-run        │
-└────────────────┘  └──────────────────┘  └──────────────────┘
+┌────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+│ Diff │ │ Watch │ │ New │
+│ │ │ │ │ │
+│ frontmatter │ │ --once (timer) │ │ auto-ID │
+│ outbound refs │ │ --interval N │ │ frontmatter │
+│ inbound refs │ │ alerts-only │ │ yaml template │
+│ body diff │ │ │ │ --dry-run │
+└────────────────┘ └──────────────────┘ └──────────────────┘
 
-┌────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│   Normalize    │  │   Stats          │  │   Dashboard      │
-│                │  │                  │  │                  │
-│ validate_fm()  │  │ citations        │  │ HTML + D3.js     │
-│ fix_frontmatter│  │ rankings         │  │ health score     │
-│ scan()         │  │ composite_score  │  │ distributions    │
-│                │  │                  │  │ attention list   │
-└────────────────┘  └──────────────────┘  └──────────────────┘
+┌────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+│ Normalize │ │ Stats │ │ Dashboard │
+│ │ │ │ │ │
+│ validate_fm() │ │ citations │ │ HTML + D3.js │
+│ fix_frontmatter│ │ rankings │ │ health score │
+│ scan() │ │ composite_score │ │ distributions │
+│ │ │ │ │ attention list │
+└────────────────┘ └──────────────────┘ └──────────────────┘
 ```
 
 ## Единая валидация frontmatter

@@ -1,0 +1,1 @@
+/root/LabDoctorM/shared/git-rules/lab-commit.sh

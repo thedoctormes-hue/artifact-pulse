@@ -7,7 +7,6 @@
 | **Статус** | 🟢 active |
 | **Путь** | `/root/LabDoctorM/projects/artifact-pulse` |
 | **Тип** | monitoring |
-| **Владелец** | owl |
 | **Приоритет** | medium |
 | **Стек** | Python |
 

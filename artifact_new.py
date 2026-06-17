@@ -49,7 +49,9 @@ def _next_id(prefix: str, existing_ids: list[int]) -> str:
     return f"{prefix}-{next_num:03d}"
 
 
-def generate_artifact(atype: str, title: str, dry_run: bool = False) -> dict:
+def generate_artifact(
+    atype: str, title: str, author: str = "ЗавЛаб", dry_run: bool = False
+) -> dict:
     """Generate a new artifact with proper frontmatter."""
     if atype not in VALID_TYPES:
         return {"error": f"Invalid type '{atype}'. Valid: {VALID_TYPES}"}
@@ -62,17 +64,38 @@ def generate_artifact(atype: str, title: str, dry_run: bool = False) -> dict:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     initial_status = next(iter(VALID_STATUSES.get(atype, ["draft"])), "draft")
 
+    # Determine source from author
+    _agent_authors = {
+        "owl",
+        "kotolizator",
+        "bestia",
+        "mangust",
+        "streikbrecher",
+        "antcat",
+        "сова",
+        "бестия",
+        "мангуст",
+        "ворон",
+        "доминика",
+        "штрейкбрехер",
+        "котолizator",
+        "raven",
+        "dominika",
+    }
+    _source = "agent" if author.lower() in _agent_authors else "manual"
+
     # Build frontmatter dict
     frontmatter = {
         "id": aid,
         "type": atype,
         "title": title,
         "status": initial_status,
-        "author": "ЗавЛаб",
+        "author": author,
         "created": now,
         "updated": now,
         "confidence": "high",
-        "source": "agent",
+        "source": _source,
+        "last_verified": now,
         "tags": [],
     }
 
@@ -89,8 +112,11 @@ def generate_artifact(atype: str, title: str, dry_run: bool = False) -> dict:
     # Build markdown content
     lines = ["---"]
     import yaml
+
     buf = __import__("io").StringIO()
-    yaml.dump(frontmatter, buf, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    yaml.dump(
+        frontmatter, buf, default_flow_style=False, allow_unicode=True, sort_keys=False
+    )
     lines.append(buf.getvalue().strip())
     lines.extend(["---", "", f"# {aid}: {title}", ""])
     content = "\n".join(lines) + "\n"
@@ -115,20 +141,29 @@ def format_result(result: dict) -> str:
 
     if result.get("dry_run"):
         fpath = result.get("file", "(not determined)")
-        return f"[DRY-RUN] Would create: {result['id']} {result['title']}\n  File: {fpath}"
+        return (
+            f"[DRY-RUN] Would create: {result['id']} {result['title']}\n  File: {fpath}"
+        )
     else:
         return f"✅ Created: {result['id']} — {result['title']}\n   File: {result['file']}\n   Status: {result['status']}"
 
 
 def main():
     parser = argparse.ArgumentParser(description="Generate new artifact template")
-    parser.add_argument("--type", "-t", required=True, choices=VALID_TYPES, help="Artifact type")
+    parser.add_argument(
+        "--type", "-t", required=True, choices=VALID_TYPES, help="Artifact type"
+    )
     parser.add_argument("--title", required=True, help="Artifact title")
+    parser.add_argument(
+        "--author", default="ЗавЛаб", help="Artifact author (default: ЗавЛаб)"
+    )
     parser.add_argument("--dry-run", action="store_true", help="Don't write to disk")
     parser.add_argument("--json", action="store_true", help="JSON output")
     args = parser.parse_args()
 
-    result = generate_artifact(args.type, args.title, dry_run=args.dry_run)
+    result = generate_artifact(
+        args.type, args.title, author=args.author, dry_run=args.dry_run
+    )
 
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))

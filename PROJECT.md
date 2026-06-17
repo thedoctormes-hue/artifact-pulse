@@ -1,8 +1,8 @@
 ---
 name: Artifact Pulse
+owner: DoctorM&Ai
 type: monitoring
 status: active
-owner: owl
 priority: medium
 stack: [Python]
 version: "1.0.0"
@@ -13,9 +13,6 @@ created: "2026-06-04"
 # Artifact Pulse
 
 Система мониторинга здоровья артефактов LabDoctorM. Отслеживает целостность, свежесть, связность и достоверность артефактов лаборатории.
-
-## Владелец
-Ворон (owl)
 
 ## Компоненты
 - `artifact_core.py` — ядро системы

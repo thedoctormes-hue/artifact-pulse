@@ -54,28 +54,28 @@ artifact-changelog --generate-changelog --since 30
 ```
 artifact-pulse/
 ├── config/
-│   └── artifact_dirs.yaml       # Пути к папкам артефактов и файлам состояния
+│ └── artifact_dirs.yaml # Пути к папкам артефактов и файлам состояния
 ├── scripts/
-│   ├── evolve_orchestrator.sh   # Оркестратор эволюции (инсайты → артефакты)
-│   └── self_evolve.sh           # Автономная эволюция (systemd timer)
+│ ├── evolve_orchestrator.sh # Оркестратор эволюции (инсайты → артефакты)
+│ └── self_evolve.sh # Автономная эволюция (systemd timer)
 ├── tests/
-│   └── test_artifact_system.py  # 108 тестов
-├── artifact_types.py            # Artifact dataclass — каноническое представление артефакта
-├── artifact_core.py             # Ядро: парсинг frontmatter, загрузка артефактов
-├── config_loader.py             # Загрузчик конфигурации (YAML → Path)
-├── artifact_health.py            # Health check (9 измерений, score 0-100)
-├── artifact_link_checker.py     # Проверка ссылок, orphans, broken links
-├── artifact_graph.py            # Граф зависимостей (DOT/JSON/HTML с D3.js)
-├── artifact_aging.py            # Старение: active → stale → archived
-├── artifact_stats.py            # Статистика, рейтинг, цитирования
-├── artifact_changelog.py        # Версионирование, CHANGELOG.md
-├── artifact_provenance.py       # Происхождение, confidence decay, верификация
-├── artifact_constraints.py      # Структурные ограничения, циклы, противоречия
-├── artifact_monitor.py          # Тренды, алерты, health history (JSONL)
-├── search_artifacts.py          # Полнотекстовый поиск с persistent index
-├── normalize_frontmatter.py     # Валидация и нормализация frontmatter
-├── audit_report.py              # Комплексный аудит-отчёт (JSON)
-├── pyproject.toml               # Пакет artifact-pulse v4.1.0, 11 entry points
+│ └── test_artifact_system.py # 108 тестов
+├── artifact_types.py # Artifact dataclass — каноническое представление артефакта
+├── artifact_core.py # Ядро: парсинг frontmatter, загрузка артефактов
+├── config_loader.py # Загрузчик конфигурации (YAML → Path)
+├── artifact_health.py # Health check (9 измерений, score 0-100)
+├── artifact_link_checker.py # Проверка ссылок, orphans, broken links
+├── artifact_graph.py # Граф зависимостей (DOT/JSON/HTML с D3.js)
+├── artifact_aging.py # Старение: active → stale → archived
+├── artifact_stats.py # Статистика, рейтинг, цитирования
+├── artifact_changelog.py # Версионирование, CHANGELOG.md
+├── artifact_provenance.py # Происхождение, confidence decay, верификация
+├── artifact_constraints.py # Структурные ограничения, циклы, противоречия
+├── artifact_monitor.py # Тренды, алерты, health history (JSONL)
+├── search_artifacts.py # Полнотекстовый поиск с persistent index
+├── normalize_frontmatter.py # Валидация и нормализация frontmatter
+├── audit_report.py # Комплексный аудит-отчёт (JSON)
+├── pyproject.toml # Пакет artifact-pulse v4.1.0, 11 entry points
 └── README.md
 ```
 
@@ -86,12 +86,12 @@ artifact-pulse/
 ```yaml
 lab_dir: /root/LabDoctorM
 artifact_dirs:
-  pattern: patterns
-  adr: adr
-  rule: rules
-  spec: specs
-  incident: incidents
-  metric: metrics
+ pattern: patterns
+ adr: adr
+ rule: rules
+ spec: specs
+ incident: incidents
+ metric: metrics
 ```
 
 Скрипты автоматически загружают конфиг через `config_loader.py`.

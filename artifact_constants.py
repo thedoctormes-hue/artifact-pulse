@@ -19,8 +19,12 @@ from typing import Final
 
 ID_PATTERN: Final = re.compile(r"^([A-Z]{2,4}-\d{3,4})$")
 # REF_PATTERN — only matches known artifact ID prefixes (not LLM-, KDL-, SHA-256, etc.)
-REF_PATTERN: Final = re.compile(r"\b((?:PAT|ADR|RUL|BL|INS|INC|SPEC|MET|SYS|RPT)-\d{3,4})\b")
-REF_PATTERN_LOOSE: Final = re.compile(r"\b((?:PAT|ADR|RUL|BL|INS|INC|SPEC|MET|SYS|RPT)-[0-9]+)\b")
+REF_PATTERN: Final = re.compile(
+    r"\b((?:PAT|ADR|RUL|BL|INS|INC|SPEC|MET|SYS|RPT)-\d{3,4})\b"
+)
+REF_PATTERN_LOOSE: Final = re.compile(
+    r"\b((?:PAT|ADR|RUL|BL|INS|INC|SPEC|MET|SYS|RPT)-[0-9]+)\b"
+)
 
 # Match markdown links: [text](path)
 MD_LINK_PATTERN: Final = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
@@ -30,11 +34,49 @@ WIKI_LINK_PATTERN: Final = re.compile(r"\[\[([A-Z]{2,4}-\d{3,4})\]\]")
 # ── Valid Statuses by Type ────────────────────────────────────
 
 VALID_STATUSES: Final[dict[str, set[str]]] = {
-    "adr": {"proposed", "accepted", "rejected", "deprecated", "superseded", "archived", "active", "draft"},
+    "adr": {
+        "proposed",
+        "accepted",
+        "rejected",
+        "deprecated",
+        "superseded",
+        "archived",
+        "active",
+        "draft",
+    },
     "pattern": {"draft", "active", "deprecated", "archived", "accepted", "proposed"},
-    "rule": {"draft", "active", "deprecated", "archived", "pending", "accepted", "proposed"},
-    "backlog": {"pending", "in_progress", "done", "cancelled", "archived", "active", "open", "closed", "resolved", "accepted", "proposed"},
-    "incident": {"open", "investigating", "resolved", "closed", "archived", "pending", "active"},
+    "rule": {
+        "draft",
+        "active",
+        "deprecated",
+        "archived",
+        "pending",
+        "accepted",
+        "proposed",
+    },
+    "backlog": {
+        "pending",
+        "in_progress",
+        "done",
+        "cancelled",
+        "archived",
+        "active",
+        "open",
+        "closed",
+        "resolved",
+        "accepted",
+        "proposed",
+    },
+    "incident": {
+        "open",
+        "investigating",
+        "resolved",
+        "closed",
+        "archived",
+        "pending",
+        "active",
+        "mitigated",
+    },
     "sys": {"draft", "active", "archived", "deprecated", "accepted", "proposed"},
     "report": {"draft", "final", "archived", "accepted", "active", "pending"},
     "metric": {"active", "deprecated", "archived", "draft", "pending", "accepted"},
@@ -46,7 +88,15 @@ ALL_VALID_STATUSES: Final[set[str]] = set().union(*VALID_STATUSES.values())
 # ── Confidence & Source ───────────────────────────────────────
 
 VALID_CONFIDENCE: Final[set[str]] = {"high", "medium", "low", "outdated"}
-VALID_SOURCES: Final[set[str]] = {"manual", "agent", "owl_agent", "evolve_orchestrator", "insight", "import", "unknown"}
+VALID_SOURCES: Final[set[str]] = {
+    "manual",
+    "agent",
+    "owl_agent",
+    "evolve_orchestrator",
+    "insight",
+    "import",
+    "unknown",
+}
 
 # Confidence decay rules: (days_without_verification, new_confidence)
 CONFIDENCE_DECAY: Final[list[tuple[float, str]]] = [

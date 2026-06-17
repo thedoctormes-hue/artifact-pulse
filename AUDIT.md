@@ -29,28 +29,28 @@ tags: [audit, artifact-pulse, review]
 ```
 artifact-pulse/
 ├── config/
-│   └── artifact_dirs.yaml      # Пути к артефактам и файлам состояния
+│ └── artifact_dirs.yaml # Пути к артефактам и файлам состояния
 ├── src/
-│   ├── __init__.py
-│   ├── config_loader.py        # Загрузчик конфига (YAML → Path)
-│   ├── artifact_health.py       # Health check (9 измерений, score 0-100)
-│   ├── artifact_link_checker.py # Проверка ссылок, orphans, broken links
-│   ├── artifact_graph.py        # Граф зависимостей (DOT/JSON/HTML)
-│   ├── artifact_aging.py        # Старение: active → stale → archived
-│   ├── artifact_stats.py        # Статистика, рейтинг, цитирования
-│   ├── artifact_changelog.py    # Версионирование, CHANGELOG.md
-│   ├── artifact_provenance.py   # Происхождение, confidence decay
-│   ├── artifact_constraints.py  # Структурные ограничения, противоречия
-│   ├── artifact_monitor.py      # Тренды, алерты, health history
-│   ├── search_artifacts.py      # Полнотекстовый поиск
-│   ├── normalize_frontmatter.py # Валидация и нормализация frontmatter
-│   └── audit_report.py          # Комплексный аудит-отчёт
+│ ├── __init__.py
+│ ├── config_loader.py # Загрузчик конфига (YAML → Path)
+│ ├── artifact_health.py # Health check (9 измерений, score 0-100)
+│ ├── artifact_link_checker.py # Проверка ссылок, orphans, broken links
+│ ├── artifact_graph.py # Граф зависимостей (DOT/JSON/HTML)
+│ ├── artifact_aging.py # Старение: active → stale → archived
+│ ├── artifact_stats.py # Статистика, рейтинг, цитирования
+│ ├── artifact_changelog.py # Версионирование, CHANGELOG.md
+│ ├── artifact_provenance.py # Происхождение, confidence decay
+│ ├── artifact_constraints.py # Структурные ограничения, противоречия
+│ ├── artifact_monitor.py # Тренды, алерты, health history
+│ ├── search_artifacts.py # Полнотекстовый поиск
+│ ├── normalize_frontmatter.py # Валидация и нормализация frontmatter
+│ └── audit_report.py # Комплексный аудит-отчёт
 ├── scripts/
-│   ├── evolve_orchestrator.sh   # Оркестратор эволюции
-│   └── self_evolve.sh           # Автономная эволюция (cron)
-├── templates/                    # ПУСТОЙ — шаблонов нет
+│ ├── evolve_orchestrator.sh # Оркестратор эволюции
+│ └── self_evolve.sh # Автономная эволюция (cron)
+├── templates/ # ПУСТОЙ — шаблонов нет
 ├── tests/
-│   └── test_artifact_system.py  # 53 теста
+│ └── test_artifact_system.py # 53 теста
 └── pyproject.toml
 ```
 
@@ -79,8 +79,8 @@ artifact-pulse/
 ### 1. Пакет не установлен как editable
 
 ```bash
-pip3 list | grep artifact  # пусто
-artifact-health --help     # command not found
+pip3 list | grep artifact # пусто
+artifact-health --help # command not found
 ```
 
 **Результат:** CLI-точки входа из `pyproject.toml` (`artifact-health`, `artifact-search` и т.д.) не работают. Импорты `from config_loader import ...` требуют `PYTHONPATH=src`.
@@ -149,14 +149,14 @@ pip3 install -e .
 ## Результаты запуска
 
 ```
-Тесты:          53 passed (1.29s)
-Health score:   72/100
-Artifacts:      95 загружено
-Code refs:      2.1% (1 из 47 активных)
-Orphans:        18
-Broken links:   0
-Stale:          0
-Constraints:    47 violations
+Тесты: 53 passed (1.29s)
+Health score: 72/100
+Artifacts: 95 загружено
+Code refs: 2.1% (1 из 47 активных)
+Orphans: 18
+Broken links: 0
+Stale: 0
+Constraints: 47 violations
 ```
 
 ---
