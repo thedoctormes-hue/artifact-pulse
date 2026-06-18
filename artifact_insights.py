@@ -109,6 +109,11 @@ def _row_to_dict(row) -> dict:
     return d
 
 
+def load_queue() -> dict:
+    """Compatibility wrapper – returns {'insights': list} for the miner v2."""
+    return {"insights": load_insights()}
+
+
 def load_insights(status_filter: str = None, limit: int = 500) -> list:
     _db_init()
     conn = _get_db()
