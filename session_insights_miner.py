@@ -23,8 +23,8 @@ import subprocess
 import os
 
 # ── Context API ───────────────────────────────────────────────────────────────
-CONTEXT_API_URL = "http://127.0.0.1:8100"
-CONTEXT_API_KEY = os.environ.get("CONTEXT_API_KEY", "lab-internal-change-me")
+CONTEXT_API_URL = os.environ.get("CONTEXT_API_URL", "http://127.0.0.1:8100")
+CONTEXT_API_KEY = os.environ.get("CONTEXT_API_KEY") or None
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 OPENCLAW_SESSIONS_BASE = Path("/root/.openclaw/agents")

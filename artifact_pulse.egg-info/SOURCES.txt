@@ -1,9 +1,0 @@
-README.md
-pyproject.toml
-artifact_pulse.egg-info/PKG-INFO
-artifact_pulse.egg-info/SOURCES.txt
-artifact_pulse.egg-info/dependency_links.txt
-artifact_pulse.egg-info/entry_points.txt
-artifact_pulse.egg-info/requires.txt
-artifact_pulse.egg-info/top_level.txt
-tests/test_artifact_system.py

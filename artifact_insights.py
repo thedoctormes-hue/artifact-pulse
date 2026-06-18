@@ -32,6 +32,28 @@ EMBED_MODEL = "bge-m3-cpu"
 SEMANTIC_DUP_THRESHOLD = 0.85
 
 DB_PATH = Path(__file__).parent.parent.parent / ".qwen" / "artifacts" / "insights.db"
+
+# Concurrency: WAL mode + BEGIN IMMEDIATE transactions + flock
+import fcntl as _fcntl  # noqa: E402
+
+_flock_fd = None
+_lock_path = Path(__file__).parent / ".insights.lock"
+
+
+def _flock_acquire():
+    global _flock_fd
+    _flock_fd = open(_lock_path, "w")
+    _fcntl.flock(_flock_fd, _fcntl.LOCK_EX)
+
+
+def _flock_release():
+    global _flock_fd
+    if _flock_fd:
+        _fcntl.flock(_flock_fd, _fcntl.LOCK_UN)
+        _flock_fd.close()
+        _flock_fd = None
+
+
 FAISS_INDEX_PATH = (
     Path(__file__).parent.parent.parent / ".qwen" / "artifacts" / "insights.faiss"
 )
@@ -132,37 +154,42 @@ def load_insights(status_filter: str = None, limit: int = 500) -> list:
 
 
 def save_insight(insight: dict):
-    _db_init()
-    conn = _get_db()
-    tags = insight.get("tags", [])
-    if isinstance(tags, list):
-        tags = ",".join(tags)
-    conn.execute(
-        """
-        INSERT OR REPLACE INTO insights
-        (id, timestamp, tool, context, content, importance, status, confirmations,
-         source, type, confidence, tags, session_id, agent_pair, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    """,
-        (
-            insight["id"],
-            insight["timestamp"],
-            insight.get("tool", "manual"),
-            insight.get("context", ""),
-            insight["content"],
-            insight.get("importance", 0.6),
-            insight.get("status", "new"),
-            insight.get("confirmations", 0),
-            insight["source"],
-            insight["type"],
-            insight.get("confidence", "medium"),
-            tags,
-            insight.get("session_id", ""),
-            insight.get("agent_pair", ""),
-        ),
-    )
-    conn.commit()
-    conn.close()
+    _flock_acquire()
+    try:
+        _db_init()
+        conn = _get_db()
+        conn.execute("BEGIN IMMEDIATE")
+        tags = insight.get("tags", [])
+        if isinstance(tags, list):
+            tags = ",".join(tags)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO insights
+            (id, timestamp, tool, context, content, importance, status, confirmations,
+             source, type, confidence, tags, session_id, agent_pair, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        """,
+            (
+                insight["id"],
+                insight["timestamp"],
+                insight.get("tool", "manual"),
+                insight.get("context", ""),
+                insight["content"],
+                insight.get("importance", 0.6),
+                insight.get("status", "new"),
+                insight.get("confirmations", 0),
+                insight["source"],
+                insight["type"],
+                insight.get("confidence", "medium"),
+                tags,
+                insight.get("session_id", ""),
+                insight.get("agent_pair", ""),
+            ),
+        )
+        conn.commit()
+        conn.close()
+    finally:
+        _flock_release()
 
 
 def update_status(insight_id: str, new_status: str) -> bool:
@@ -171,16 +198,21 @@ def update_status(insight_id: str, new_status: str) -> bool:
             f"Ошибка: неизвестный статус '{new_status}'. Допустимые: {', '.join(sorted(VALID_STATUS))}"
         )
         return False
-    _db_init()
-    conn = _get_db()
-    cur = conn.execute(
-        "UPDATE insights SET status = ?, updated_at = datetime('now') WHERE id = ?",
-        (new_status, insight_id),
-    )
-    conn.commit()
-    found = cur.rowcount > 0
-    conn.close()
-    return found
+    _flock_acquire()
+    try:
+        _db_init()
+        conn = _get_db()
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            "UPDATE insights SET status = ?, updated_at = datetime('now') WHERE id = ?",
+            (new_status, insight_id),
+        )
+        conn.commit()
+        found = cur.rowcount > 0
+        conn.close()
+        return found
+    finally:
+        _flock_release()
 
 
 # ── Embedding / Dedup ────────────────────────────────────────────────────────
@@ -195,7 +227,12 @@ def _cosine_sim(a: list, b: list) -> float:
     return dot / (na * nb) if na and nb else 0.0
 
 
-def _get_embedding(text: str, max_retries: int = 3) -> list:
+def _get_embedding(text: str, max_retries: int = 2) -> list:
+    """Get embedding from Ollama with strict 5s timeout.
+    
+    FAISS is the primary dedup engine — Ollama is only used to get
+    the new vector for FAISS lookup. If Ollama hangs, we skip it.
+    """
     import time as _time
 
     data = json.dumps({"model": EMBED_MODEL, "prompt": text[:512]}).encode()
@@ -207,12 +244,12 @@ def _get_embedding(text: str, max_retries: int = 3) -> list:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=5) as resp:
                 result = json.loads(resp.read())
             return result.get("embedding", [])
         except urllib.error.HTTPError as e:
             if e.code == 500 and attempt < max_retries - 1:
-                _time.sleep((attempt + 1) * 2)
+                _time.sleep(1)
                 continue
             print(f"[embed warn] HTTP {e.code}: {e.reason}", file=sys.stderr)
             return []
@@ -294,16 +331,16 @@ def add_insight(
     session_id: str = "",
     agent_pair: str = "",
 ) -> dict:
+    if not content or not content.strip():
+        raise ValueError("content cannot be empty")
     if insight_type not in VALID_TYPES:
-        print(
-            f"Ошибка: неизвестный тип '{insight_type}'. Допустимые: {', '.join(sorted(VALID_TYPES))}"
+        raise ValueError(
+            f"Unknown type '{insight_type}'. Valid: {sorted(VALID_TYPES)}"
         )
-        sys.exit(1)
     if confidence not in VALID_CONFIDENCE:
-        print(
-            f"Ошибка: неизвестная уверенность '{confidence}'. Допустимые: {', '.join(sorted(VALID_CONFIDENCE.keys()))}"
+        raise ValueError(
+            f"Unknown confidence '{confidence}'. Valid: {list(VALID_CONFIDENCE.keys())}"
         )
-        sys.exit(1)
 
     if _semantic_is_duplicate(content):
         print("Дубликат (semantic): инсайт уже существует, пропускаем")
@@ -357,40 +394,45 @@ def list_insights(status: str = None, limit: int = 20, source: str = None):
 
 def consolidate(min_confidence: float = 0.5):
     """Status flow: new → verified (confirmations>=2), verified → artifact (importance>=threshold)."""
-    _db_init()
-    conn = _get_db()
+    _flock_acquire()
+    try:
+        _db_init()
+        conn = _get_db()
+        conn.execute("BEGIN IMMEDIATE")
 
-    # new → verified: need >= 2 confirmations
-    cur1 = conn.execute("""
-        UPDATE insights SET status = 'verified', updated_at = datetime('now')
-        WHERE status = 'new' AND confirmations >= 2
-    """)
-    new_to_verified = cur1.rowcount
+        # new → verified: need >= 2 confirmations
+        cur1 = conn.execute("""
+            UPDATE insights SET status = 'verified', updated_at = datetime('now')
+            WHERE status = 'new' AND confirmations >= 2
+        """)
+        new_to_verified = cur1.rowcount
 
-    # verified → artifact: need importance >= threshold from trusted sources
-    cur2 = conn.execute(
-        """
-        UPDATE insights SET status = 'artifact', updated_at = datetime('now')
-        WHERE status = 'verified'
-        AND importance >= ?
-        AND source IN ('owl', 'dominika', 'antcat', 'sessions', 'manual', 'bestia', 'kotolizator', 'mangust', 'voron', 'shtreykbreher')
-    """,
-        (min_confidence,),
-    )
-    verified_to_artifact = cur2.rowcount
+        # verified → artifact: need importance >= threshold from trusted sources
+        cur2 = conn.execute(
+            """
+            UPDATE insights SET status = 'artifact', updated_at = datetime('now')
+            WHERE status = 'verified'
+            AND importance >= ?
+            AND source IN ('owl', 'dominika', 'antcat', 'sessions', 'manual', 'bestia', 'kotolizator', 'mangust', 'voron', 'shtreykbreher')
+        """,
+            (min_confidence,),
+        )
+        verified_to_artifact = cur2.rowcount
 
-    conn.commit()
+        conn.commit()
 
-    print(f"new → verified: {new_to_verified}")
-    print(f"verified → artifact: {verified_to_artifact}")
+        print(f"new → verified: {new_to_verified}")
+        print(f"verified → artifact: {verified_to_artifact}")
 
-    stats = conn.execute(
-        "SELECT status, COUNT(*) as c FROM insights GROUP BY status ORDER BY c DESC"
-    ).fetchall()
-    print("\nТекущее распределение:")
-    for s, c in stats:
-        print(f"  {s}: {c}")
-    conn.close()
+        stats = conn.execute(
+            "SELECT status, COUNT(*) as c FROM insights GROUP BY status ORDER BY c DESC"
+        ).fetchall()
+        print("\nТекущее распределение:")
+        for s, c in stats:
+            print(f"  {s}: {c}")
+        conn.close()
+    finally:
+        _flock_release()
 
 
 def show_stats():
@@ -422,57 +464,62 @@ def show_stats():
 
 def verify_insight(insight_id: str):
     """Increment confirmations. Auto-promote new→verified if confirmations>=2."""
-    _db_init()
-    conn = _get_db()
-    row = conn.execute(
-        "SELECT id, confirmations, status FROM insights WHERE id = ?", (insight_id,)
-    ).fetchone()
-    if not row:
-        print(f"❌ Инсайт {insight_id} не найден")
-        conn.close()
-        return False
+    _flock_acquire()
+    try:
+        _db_init()
+        conn = _get_db()
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT id, confirmations, status FROM insights WHERE id = ?", (insight_id,)
+        ).fetchone()
+        if not row:
+            conn.close()
+            raise ValueError(f"Insight {insight_id} not found")
 
-    new_conf = row["confirmations"] + 1
-    new_status = (
-        "verified" if new_conf >= 2 and row["status"] == "new" else row["status"]
-    )
-    conn.execute(
-        "UPDATE insights SET confirmations = ?, status = ?, updated_at = datetime('now') WHERE id = ?",
-        (new_conf, new_status, insight_id),
-    )
-    conn.commit()
-    conn.close()
-    print(
-        f"✅ Инсайт {insight_id} подтверждён (confirmations={new_conf}, status={new_status})"
-    )
-    return True
+        new_conf = row["confirmations"] + 1
+        new_status = (
+            "verified" if new_conf >= 2 and row["status"] == "new" else row["status"]
+        )
+        conn.execute(
+            "UPDATE insights SET confirmations = ?, status = ?, updated_at = datetime('now') WHERE id = ?",
+            (new_conf, new_status, insight_id),
+        )
+        conn.commit()
+        conn.close()
+        print(
+            f"✅ Инсайт {insight_id} подтверждён (confirmations={new_conf}, status={new_status})"
+        )
+        return True
+    finally:
+        _flock_release()
 
 
 def promote_insight(insight_id: str):
     """Promote verified → artifact."""
-    _db_init()
-    conn = _get_db()
-    row = conn.execute(
-        "SELECT id, status, importance FROM insights WHERE id = ?", (insight_id,)
-    ).fetchone()
-    if not row:
-        print(f"❌ Инсайт {insight_id} не найден")
-        conn.close()
-        return False
-    if row["status"] != "verified":
-        print(
-            f"⚠️  Инсайт {insight_id} в статусе '{row['status']}', ожидается 'verified'"
+    _flock_acquire()
+    try:
+        _db_init()
+        conn = _get_db()
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT id, status, importance FROM insights WHERE id = ?", (insight_id,)
+        ).fetchone()
+        if not row:
+            conn.close()
+            raise ValueError(f"Insight {insight_id} not found")
+        if row["status"] != "verified":
+            conn.close()
+            raise ValueError(f"Insight {insight_id} status is '{row['status']}', expected 'verified'")
+        conn.execute(
+            "UPDATE insights SET status = 'artifact', updated_at = datetime('now') WHERE id = ?",
+            (insight_id,),
         )
+        conn.commit()
         conn.close()
-        return False
-    conn.execute(
-        "UPDATE insights SET status = 'artifact', updated_at = datetime('now') WHERE id = ?",
-        (insight_id,),
-    )
-    conn.commit()
-    conn.close()
-    print(f"✅ Инсайт {insight_id} → artifact (importance={row['importance']})")
-    return True
+        print(f"✅ Инсайт {insight_id} → artifact (importance={row['importance']})")
+        return True
+    finally:
+        _flock_release()
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────

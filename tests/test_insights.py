@@ -190,18 +190,18 @@ class TestStatusFlow:
     def test_promote_new_fails(self, tmp_db, sample_insight):
         """promote НЕ работает для new (только verified)."""
         ai.save_insight(sample_insight)  # status=new
-        result = ai.promote_insight("INS-TEST-001")
-        assert result is False
+        with pytest.raises(ValueError, match="expected 'verified'"):
+            ai.promote_insight("INS-TEST-001")
 
     def test_promote_not_found(self, tmp_db):
-        """promote возвращает False для несуществующего ID."""
-        result = ai.promote_insight("INS-NONEXISTENT")
-        assert result is False
+        """promote бросает ValueError для несуществующего ID."""
+        with pytest.raises(ValueError, match="not found"):
+            ai.promote_insight("INS-NONEXISTENT")
 
     def test_verify_not_found(self, tmp_db):
-        """verify обрабатывает несуществующий ID."""
-        result = ai.verify_insight("INS-NONEXISTENT")
-        assert result is False
+        """verify бросает ValueError для несуществующего ID."""
+        with pytest.raises(ValueError, match="not found"):
+            ai.verify_insight("INS-NONEXISTENT")
 
     def test_consolidate_new_to_verified(self, tmp_db, sample_insight):
         """consolidate переводит new→verified при confirmations>=2.
