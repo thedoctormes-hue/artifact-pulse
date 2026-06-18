@@ -2,24 +2,40 @@
 """
 artifact_insights.py — Модуль приёма и консолидации инсайтов для artifact-pulse.
 
+Status flow: new → verified → artifact
+
 Использование:
   python3 artifact_insights.py add --content "..." --source "agent" --type "finding" [--confidence high] [--context "..."] [--tags "t1,t2"]
   python3 artifact_insights.py list [--status new] [--limit 20]
-  python3 artifact_insights.py consolidate [--min-confidence 0.7] [--dry-run]
-  python3 artifact_insights.py stats
+  python3 artifact_insights.py consolidate [--min-confidence 0.7]
   python3 artifact_insights.py verify --id INS-XXX
+  python3 artifact_insights.py promote --id INS-XXX
+  python3 artifact_insights.py stats
 """
 
 import argparse
 import json
 import hashlib
 import sys
+import math
+import sqlite3
+import struct
+import urllib.request
+import urllib.parse
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 
-QUEUE_PATH = (
-    Path(__file__).parent.parent.parent / ".qwen" / "artifacts" / "insights_queue.json"
+# ── Ollama bge-m3 (semantic dedup) ──────────────────────────────────────────
+OLLAMA_URL = "http://127.0.0.1:11434"
+EMBED_MODEL = "bge-m3-cpu"
+SEMANTIC_DUP_THRESHOLD = 0.85
+
+DB_PATH = Path(__file__).parent.parent.parent / ".qwen" / "artifacts" / "insights.db"
+FAISS_INDEX_PATH = (
+    Path(__file__).parent.parent.parent / ".qwen" / "artifacts" / "insights.faiss"
 )
+
 ARTIFACT_DIRS = {
     "adr": "adr/",
     "pattern": "patterns/",
@@ -28,22 +44,232 @@ ARTIFACT_DIRS = {
     "spec": "specs/",
     "metric": "metrics/",
 }
-VALID_TYPES = {"error", "decision", "finding", "pattern", "anti-pattern", "insight"}
+VALID_TYPES = {
+    "error",
+    "decision",
+    "finding",
+    "pattern",
+    "anti-pattern",
+    "insight",
+    "security",
+}
 VALID_CONFIDENCE = {"low": 0.3, "medium": 0.6, "high": 0.9}
-VALID_STATUS = {"new", "consolidated", "promoted", "rejected", "archived"}
+VALID_STATUS = {"new", "verified", "artifact", "rejected", "archived"}
+
+# ── SQLite ───────────────────────────────────────────────────────────────────
 
 
-def load_queue() -> dict:
-    if QUEUE_PATH.exists():
-        with open(QUEUE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"version": 3, "insights": []}
+def _get_db():
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-def save_queue(queue: dict):
-    QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(QUEUE_PATH, "w", encoding="utf-8") as f:
-        json.dump(queue, f, indent=2, ensure_ascii=False)
+def _db_init():
+    conn = _get_db()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS insights (
+            id TEXT PRIMARY KEY,
+            timestamp TEXT NOT NULL,
+            tool TEXT DEFAULT 'manual',
+            context TEXT DEFAULT '',
+            content TEXT NOT NULL,
+            importance REAL DEFAULT 0.6,
+            status TEXT DEFAULT 'new',
+            confirmations INTEGER DEFAULT 0,
+            source TEXT NOT NULL,
+            type TEXT NOT NULL,
+            confidence TEXT DEFAULT 'medium',
+            tags TEXT DEFAULT '',
+            session_id TEXT DEFAULT '',
+            agent_pair TEXT DEFAULT '',
+            embedding BLOB,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_ins_status ON insights(status);
+        CREATE INDEX IF NOT EXISTS idx_ins_type ON insights(type);
+        CREATE INDEX IF NOT EXISTS idx_ins_source ON insights(source);
+    """)
+    conn.commit()
+    conn.close()
+
+
+def _row_to_dict(row) -> dict:
+    if row is None:
+        return {}
+    d = dict(row)
+    # parse tags back to list
+    if d.get("tags"):
+        d["tags"] = [t.strip() for t in d["tags"].split(",") if t.strip()]
+    else:
+        d["tags"] = []
+    return d
+
+
+def load_insights(status_filter: str = None, limit: int = 500) -> list:
+    _db_init()
+    conn = _get_db()
+    if status_filter:
+        rows = conn.execute(
+            "SELECT * FROM insights WHERE status = ? ORDER BY timestamp DESC LIMIT ?",
+            (status_filter, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM insights ORDER BY timestamp DESC LIMIT ?", (limit,)
+        ).fetchall()
+    result = [_row_to_dict(r) for r in rows]
+    conn.close()
+    return result
+
+
+def save_insight(insight: dict):
+    _db_init()
+    conn = _get_db()
+    tags = insight.get("tags", [])
+    if isinstance(tags, list):
+        tags = ",".join(tags)
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO insights
+        (id, timestamp, tool, context, content, importance, status, confirmations,
+         source, type, confidence, tags, session_id, agent_pair, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    """,
+        (
+            insight["id"],
+            insight["timestamp"],
+            insight.get("tool", "manual"),
+            insight.get("context", ""),
+            insight["content"],
+            insight.get("importance", 0.6),
+            insight.get("status", "new"),
+            insight.get("confirmations", 0),
+            insight["source"],
+            insight["type"],
+            insight.get("confidence", "medium"),
+            tags,
+            insight.get("session_id", ""),
+            insight.get("agent_pair", ""),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_status(insight_id: str, new_status: str) -> bool:
+    if new_status not in VALID_STATUS:
+        print(
+            f"Ошибка: неизвестный статус '{new_status}'. Допустимые: {', '.join(sorted(VALID_STATUS))}"
+        )
+        return False
+    _db_init()
+    conn = _get_db()
+    cur = conn.execute(
+        "UPDATE insights SET status = ?, updated_at = datetime('now') WHERE id = ?",
+        (new_status, insight_id),
+    )
+    conn.commit()
+    found = cur.rowcount > 0
+    conn.close()
+    return found
+
+
+# ── Embedding / Dedup ────────────────────────────────────────────────────────
+
+
+def _cosine_sim(a: list, b: list) -> float:
+    if not a or not b:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _get_embedding(text: str, max_retries: int = 3) -> list:
+    import time as _time
+
+    data = json.dumps({"model": EMBED_MODEL, "prompt": text[:512]}).encode()
+    for attempt in range(max_retries):
+        try:
+            req = urllib.request.Request(
+                f"{OLLAMA_URL}/api/embeddings",
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                result = json.loads(resp.read())
+            return result.get("embedding", [])
+        except urllib.error.HTTPError as e:
+            if e.code == 500 and attempt < max_retries - 1:
+                _time.sleep((attempt + 1) * 2)
+                continue
+            print(f"[embed warn] HTTP {e.code}: {e.reason}", file=sys.stderr)
+            return []
+        except Exception as e:
+            if attempt < max_retries - 1:
+                _time.sleep(1)
+                continue
+            print(f"[embed warn] {e}", file=sys.stderr)
+            return []
+    return []
+
+
+def _semantic_is_duplicate(content: str) -> bool:
+    """Check for semantic duplicates using FAISS first, then exact text match fallback."""
+    # Primary: FAISS (fast, one Ollama call for the new text only)
+    try:
+        import faiss
+        import numpy as np
+
+        if FAISS_INDEX_PATH.exists():
+            index = faiss.read_index(str(FAISS_INDEX_PATH))
+            vec = _get_embedding(content)
+            if vec:
+                vec_np = np.array([vec], dtype=np.float32)
+                faiss.normalize_L2(vec_np)
+                distances, indices = index.search(vec_np, 3)
+                if distances[0][0] >= SEMANTIC_DUP_THRESHOLD:
+                    return True
+                else:
+                    # FAISS found results but none above threshold → not a duplicate
+                    return False
+    except Exception as e:
+        print(f"[dedup warn] FAISS failed: {e}", file=sys.stderr)
+
+    # Fallback: exact text match (no Ollama needed)
+    _db_init()
+    conn = _get_db()
+    row = conn.execute(
+        "SELECT id FROM insights WHERE lower(content) = lower(?)", (content.strip(),)
+    ).fetchone()
+    conn.close()
+    if row:
+        return True
+
+    # Last resort: if FAISS unavailable, use Ollama for pairwise comparison
+    qvec = _get_embedding(content)
+    if not qvec:
+        return False  # Can't determine, assume not duplicate
+
+    recent = load_insights(limit=50)
+    for existing in recent:
+        evec = existing.get("embedding", [])
+        if isinstance(evec, bytes):
+            evec = list(struct.unpack(f"{len(evec)//4}f", evec))
+        if not evec:
+            evec = _get_embedding(existing["content"])
+        if evec and _cosine_sim(qvec, evec) >= SEMANTIC_DUP_THRESHOLD:
+            return True
+    return False
+
+
+# ── CRUD ─────────────────────────────────────────────────────────────────────
 
 
 def generate_id(content: str) -> str:
@@ -60,31 +286,23 @@ def add_insight(
     context: str = "",
     tags: str = "",
     tool: str = "",
+    session_id: str = "",
+    agent_pair: str = "",
 ) -> dict:
     if insight_type not in VALID_TYPES:
         print(
             f"Ошибка: неизвестный тип '{insight_type}'. Допустимые: {', '.join(sorted(VALID_TYPES))}"
         )
         sys.exit(1)
-
     if confidence not in VALID_CONFIDENCE:
         print(
             f"Ошибка: неизвестная уверенность '{confidence}'. Допустимые: {', '.join(sorted(VALID_CONFIDENCE.keys()))}"
         )
         sys.exit(1)
 
-    queue = load_queue()
-
-    # Дедупликация: проверяем последние 50 инсайтов на совпадение content
-    for existing in queue["insights"][-50:]:
-        if (
-            existing["content"].strip() == content.strip()
-            and existing["source"] == source
-        ):
-            print(
-                f"Дубликат: инсайт уже существует как {existing['id']} (status: {existing['status']})"
-            )
-            return existing
+    if _semantic_is_duplicate(content):
+        print("Дубликат (semantic): инсайт уже существует, пропускаем")
+        return {}
 
     insight = {
         "id": generate_id(content),
@@ -99,10 +317,10 @@ def add_insight(
         "type": insight_type,
         "confidence": confidence,
         "tags": [t.strip() for t in tags.split(",") if t.strip()] if tags else [],
+        "session_id": session_id,
+        "agent_pair": agent_pair,
     }
-
-    queue["insights"].append(insight)
-    save_queue(queue)
+    save_insight(insight)
     print(
         f"✅ Инсайт записан: {insight['id']} (type={insight_type}, confidence={confidence})"
     )
@@ -110,11 +328,7 @@ def add_insight(
 
 
 def list_insights(status: str = None, limit: int = 20, source: str = None):
-    queue = load_queue()
-    insights = queue["insights"]
-
-    if status:
-        insights = [i for i in insights if i.get("status") == status]
+    insights = load_insights(status_filter=status, limit=limit)
     if source:
         insights = [i for i in insights if i.get("source") == source]
 
@@ -124,8 +338,7 @@ def list_insights(status: str = None, limit: int = 20, source: str = None):
         + (f" (показано последние {limit})" if total > limit else "")
     )
     print()
-
-    for i in insights[-limit:]:
+    for i in insights[:limit]:
         tags = ", ".join(i.get("tags", []))
         print(f"  [{i['status']}] {i['id']}")
         print(
@@ -137,86 +350,127 @@ def list_insights(status: str = None, limit: int = 20, source: str = None):
         print()
 
 
-def consolidate(min_confidence: float = 0.5, dry_run: bool = False):
-    """Консолидация: группировка связанных инсайтов, повышение статуса."""
-    queue = load_queue()
-    new_insights = [i for i in queue["insights"] if i["status"] == "new"]
+def consolidate(min_confidence: float = 0.5):
+    """Status flow: new → verified (confirmations>=2), verified → artifact (importance>=threshold)."""
+    _db_init()
+    conn = _get_db()
 
-    if not new_insights:
-        print("Нет новых инсайтов для консолидации.")
-        return
+    # new → verified: need >= 2 confirmations
+    cur1 = conn.execute("""
+        UPDATE insights SET status = 'verified', updated_at = datetime('now')
+        WHERE status = 'new' AND confirmations >= 2
+    """)
+    new_to_verified = cur1.rowcount
 
-    print(f"Новых инсайтов: {len(new_insights)}")
+    # verified → artifact: need importance >= threshold from trusted sources
+    cur2 = conn.execute(
+        """
+        UPDATE insights SET status = 'artifact', updated_at = datetime('now')
+        WHERE status = 'verified'
+        AND importance >= ?
+        AND source IN ('owl', 'dominika', 'antcat', 'sessions', 'manual', 'bestia', 'kotolizator', 'mangust', 'voron', 'shtreykbreher')
+    """,
+        (min_confidence,),
+    )
+    verified_to_artifact = cur2.rowcount
 
-    # Группировка по тегам и контексту
-    groups = {}
-    for i in new_insights:
-        key_ctx = i.get("context", "")[:30]
-        group_key = (i.get("type", "insight"), key_ctx)
-        if group_key not in groups:
-            groups[group_key] = []
-        groups[group_key].append(i)
+    conn.commit()
 
-    promoted = 0
-    for (itype, ctx), items in groups.items():
-        avg_confidence = sum(i["importance"] for i in items) / len(items)
+    print(f"new → verified: {new_to_verified}")
+    print(f"verified → artifact: {verified_to_artifact}")
 
-        if avg_confidence >= min_confidence and len(items) >= 1:
-            if not dry_run:
-                for i in items:
-                    i["status"] = "consolidated"
-            promoted += len(items)
-            print(
-                f"  Группа ({itype}, {ctx!r}): {len(items)} инсайтов, avg_confidence={avg_confidence:.2f} → consolidated"
-            )
-
-    if not dry_run:
-        save_queue(queue)
-    print(f"\n{'[DRY RUN] ' if dry_run else ''}Продвинуто: {promoted} инсайтов")
+    stats = conn.execute(
+        "SELECT status, COUNT(*) as c FROM insights GROUP BY status ORDER BY c DESC"
+    ).fetchall()
+    print("\nТекущее распределение:")
+    for s, c in stats:
+        print(f"  {s}: {c}")
+    conn.close()
 
 
 def show_stats():
-    queue = load_queue()
-    insights = queue["insights"]
-    total = len(insights)
+    _db_init()
+    conn = _get_db()
+    total = conn.execute("SELECT COUNT(*) FROM insights").fetchone()[0]
+    by_status = conn.execute(
+        "SELECT status, COUNT(*) as c FROM insights GROUP BY status ORDER BY c DESC"
+    ).fetchall()
+    by_type = conn.execute(
+        "SELECT type, COUNT(*) as c FROM insights GROUP BY type ORDER BY c DESC"
+    ).fetchall()
+    by_source = conn.execute(
+        "SELECT source, COUNT(*) as c FROM insights GROUP BY source ORDER BY c DESC"
+    ).fetchall()
 
-    by_status = {}
-    by_type = {}
-    by_source = {}
-    for i in insights:
-        s = i.get("status", "unknown")
-        t = i.get("type", "unknown")
-        src = i.get("source", "unknown")
-        by_status[s] = by_status.get(s, 0) + 1
-        by_type[t] = by_type.get(t, 0) + 1
-        by_source[src] = by_source.get(src, 0) + 1
-
-    print(f"Всего инсайтов: {total}")
-    print()
+    print(f"Всего инсайтов: {total}\n")
     print("По статусам:")
-    for s, c in sorted(by_status.items(), key=lambda x: -x[1]):
+    for s, c in by_status:
         print(f"  {s}: {c}")
     print("По типам:")
-    for t, c in sorted(by_type.items(), key=lambda x: -x[1]):
+    for t, c in by_type:
         print(f"  {t}: {c}")
     print("По источникам:")
-    for src, c in sorted(by_source.items(), key=lambda x: -x[1]):
+    for src, c in by_source:
         print(f"  {src}: {c}")
+    conn.close()
 
 
 def verify_insight(insight_id: str):
-    """Подтвердить инсайт (increment confirmations)."""
-    queue = load_queue()
-    for i in queue["insights"]:
-        if i["id"] == insight_id:
-            i["confirmations"] = i.get("confirmations", 0) + 1
-            i["last_verified"] = datetime.now(timezone.utc).isoformat()
-            save_queue(queue)
-            print(
-                f"✅ Инсайт {insight_id} подтверждён (confirmations={i['confirmations']})"
-            )
-            return
-    print(f"Инсайт {insight_id} не найден")
+    """Increment confirmations. Auto-promote new→verified if confirmations>=2."""
+    _db_init()
+    conn = _get_db()
+    row = conn.execute(
+        "SELECT id, confirmations, status FROM insights WHERE id = ?", (insight_id,)
+    ).fetchone()
+    if not row:
+        print(f"❌ Инсайт {insight_id} не найден")
+        conn.close()
+        return False
+
+    new_conf = row["confirmations"] + 1
+    new_status = (
+        "verified" if new_conf >= 2 and row["status"] == "new" else row["status"]
+    )
+    conn.execute(
+        "UPDATE insights SET confirmations = ?, status = ?, updated_at = datetime('now') WHERE id = ?",
+        (new_conf, new_status, insight_id),
+    )
+    conn.commit()
+    conn.close()
+    print(
+        f"✅ Инсайт {insight_id} подтверждён (confirmations={new_conf}, status={new_status})"
+    )
+    return True
+
+
+def promote_insight(insight_id: str):
+    """Promote verified → artifact."""
+    _db_init()
+    conn = _get_db()
+    row = conn.execute(
+        "SELECT id, status, importance FROM insights WHERE id = ?", (insight_id,)
+    ).fetchone()
+    if not row:
+        print(f"❌ Инсайт {insight_id} не найден")
+        conn.close()
+        return False
+    if row["status"] != "verified":
+        print(
+            f"⚠️  Инсайт {insight_id} в статусе '{row['status']}', ожидается 'verified'"
+        )
+        conn.close()
+        return False
+    conn.execute(
+        "UPDATE insights SET status = 'artifact', updated_at = datetime('now') WHERE id = ?",
+        (insight_id,),
+    )
+    conn.commit()
+    conn.close()
+    print(f"✅ Инсайт {insight_id} → artifact (importance={row['importance']})")
+    return True
+
+
+# ── CLI ──────────────────────────────────────────────────────────────────────
 
 
 def main():
@@ -225,33 +479,40 @@ def main():
 
     # add
     p_add = subparsers.add_parser("add", help="Добавить инсайт")
-    p_add.add_argument("--content", required=True, help="Описание инсайта")
-    p_add.add_argument("--source", required=True, help="Источник (имя агента)")
-    p_add.add_argument("--type", required=True, dest="insight_type", help="Тип инсайта")
+    p_add.add_argument("--content", required=True)
+    p_add.add_argument("--source", required=True)
+    p_add.add_argument("--type", required=True, dest="insight_type")
     p_add.add_argument(
         "--confidence", default="medium", choices=list(VALID_CONFIDENCE.keys())
     )
-    p_add.add_argument("--context", default="", help="Контекст")
-    p_add.add_argument("--tags", default="", help="Теги через запятую")
-    p_add.add_argument("--tool", default="", help="Инструмент")
+    p_add.add_argument("--context", default="")
+    p_add.add_argument("--tags", default="")
+    p_add.add_argument("--tool", default="")
+    p_add.add_argument("--session-id", default="")
+    p_add.add_argument("--agent-pair", default="")
 
     # list
     p_list = subparsers.add_parser("list", help="Список инсайтов")
-    p_list.add_argument("--status", default=None, help="Фильтр по статусу")
-    p_list.add_argument("--source", default=None, help="Фильтр по источнику")
+    p_list.add_argument("--status", default=None)
+    p_list.add_argument("--source", default=None)
     p_list.add_argument("--limit", type=int, default=20)
 
     # consolidate
-    p_cons = subparsers.add_parser("consolidate", help="Консолидация инсайтов")
+    p_cons = subparsers.add_parser(
+        "consolidate", help="Консолидация: new→verified→artifact"
+    )
     p_cons.add_argument("--min-confidence", type=float, default=0.5)
-    p_cons.add_argument("--dry-run", action="store_true")
 
     # stats
     subparsers.add_parser("stats", help="Статистика")
 
     # verify
-    p_verify = subparsers.add_parser("verify", help="Подтвердить инсайт")
-    p_verify.add_argument("--id", required=True, help="ID инсайта")
+    p_verify = subparsers.add_parser("verify", help="Подтвердить инсайт (new→verified)")
+    p_verify.add_argument("--id", required=True)
+
+    # promote
+    p_promote = subparsers.add_parser("promote", help="Продвинуть verified→artifact")
+    p_promote.add_argument("--id", required=True)
 
     args = parser.parse_args()
 
@@ -264,15 +525,19 @@ def main():
             args.context,
             args.tags,
             args.tool,
+            args.session_id,
+            args.agent_pair,
         )
     elif args.command == "list":
         list_insights(args.status, args.limit, args.source)
     elif args.command == "consolidate":
-        consolidate(args.min_confidence, args.dry_run)
+        consolidate(args.min_confidence)
     elif args.command == "stats":
         show_stats()
     elif args.command == "verify":
         verify_insight(args.id)
+    elif args.command == "promote":
+        promote_insight(args.id)
     else:
         parser.print_help()
 

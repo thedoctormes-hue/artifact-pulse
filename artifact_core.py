@@ -22,6 +22,41 @@ from artifact_types import Artifact
 
 # ── Frontmatter ────────────────────────────────────────────────
 
+
+def _sanitize_fm_value(val: str) -> str:
+    """Wrap a YAML value in double quotes if it contains ':' and is not already quoted."""
+    val = val.strip()
+    if not val:
+        return val
+    if (val.startswith('"') and val.endswith('"')) or (
+        val.startswith("'") and val.endswith("'")
+    ):
+        return val  # already quoted
+    if ":" in val:
+        # Escape any existing double quotes inside the value
+        val = val.replace('"', '\\"')
+        return f'"{val}"'
+    return val
+
+
+def _sanitize_frontmatter_text(fm_text: str) -> str:
+    """Pre-process frontmatter text so values with colons are quoted.
+
+    Operates line by line: for 'key: value' lines, the value portion
+    is wrapped in quotes when it contains an unquoted colon.
+    """
+    lines = fm_text.splitlines()
+    out = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("-") or ": " not in stripped:
+            out.append(line)
+            continue
+        key, value = line.split(": ", 1)
+        out.append(f"{key}: {_sanitize_fm_value(value)}")
+    return "\n".join(out) + "\n"
+
+
 def parse_frontmatter(content: str) -> tuple[dict, str]:
     """Parse YAML frontmatter from markdown content using yaml.safe_load.
 
@@ -36,14 +71,21 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
         return {}, content
 
     fm_text = content[3:end].strip()
-    body = content[end + 3:].strip()
+    body = content[end + 3 :].strip()
 
     try:
         metadata = yaml.safe_load(fm_text) or {}
         if not isinstance(metadata, dict):
             metadata, body = {}, content
     except yaml.YAMLError:
-        metadata = {}
+        # Retry with sanitized values (quote values containing ':')
+        try:
+            fm_text = _sanitize_frontmatter_text(fm_text)
+            metadata = yaml.safe_load(fm_text) or {}
+            if not isinstance(metadata, dict):
+                metadata, body = {}, content
+        except yaml.YAMLError:
+            metadata = {}
 
     return metadata, body
 
@@ -62,19 +104,26 @@ def parse_frontmatter_with_raw(content: str) -> tuple[dict, str, str]:
         return {}, content, ""
 
     fm_text = content[3:end].strip()
-    body = content[end + 3:].strip()
+    body = content[end + 3 :].strip()
 
     try:
         metadata = yaml.safe_load(fm_text) or {}
         if not isinstance(metadata, dict):
             metadata, body, fm_text = {}, content, ""
     except yaml.YAMLError:
-        metadata = {}
+        try:
+            fm_text = _sanitize_frontmatter_text(fm_text)
+            metadata = yaml.safe_load(fm_text) or {}
+            if not isinstance(metadata, dict):
+                metadata, body, fm_text = {}, content, ""
+        except yaml.YAMLError:
+            metadata = {}
 
     return metadata, body, fm_text
 
 
 # ── Encoding detection ─────────────────────────────────────────
+
 
 def detect_encoding(fpath: Path) -> str:
     """Detect file encoding. Returns encoding name.
@@ -85,16 +134,16 @@ def detect_encoding(fpath: Path) -> str:
     3. Fallback: latin-1 (never fails, maps bytes 1:1)
     """
     raw = fpath.read_bytes()
-    if raw.startswith((b'\xff\xfe', b'\xfe\xff')):
-        return 'utf-16'
-    if raw.startswith(b'\xef\xbb\xbf'):
-        return 'utf-8-sig'
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return "utf-16"
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return "utf-8-sig"
     try:
-        raw.decode('utf-8')
-        return 'utf-8'
+        raw.decode("utf-8")
+        return "utf-8"
     except UnicodeDecodeError:
         pass
-    return 'latin-1'
+    return "latin-1"
 
 
 def read_text_safe(fpath: Path) -> tuple:
@@ -103,12 +152,17 @@ def read_text_safe(fpath: Path) -> tuple:
     try:
         return fpath.read_text(encoding=enc), enc
     except (OSError, UnicodeDecodeError):
-        return fpath.read_bytes().decode('latin-1', errors='replace'), 'latin-1-fallback'
+        return fpath.read_bytes().decode(
+            "latin-1", errors="replace"
+        ), "latin-1-fallback"
 
 
 # ── Unified Validation ─────────────────────────────────────────
 
-def validate_frontmatter(fm: dict, encoding: str = "utf-8", fpath=None) -> tuple[list[str], list[str]]:
+
+def validate_frontmatter(
+    fm: dict, encoding: str = "utf-8", fpath=None
+) -> tuple[list[str], list[str]]:
     """Единая функция валидации frontmatter для всех модулей.
 
     Returns (errors, warnings).
@@ -144,6 +198,7 @@ def validate_frontmatter(fm: dict, encoding: str = "utf-8", fpath=None) -> tuple
 
 
 # ── File loading ───────────────────────────────────────────────
+
 
 def load_artifact_file(fpath: Path) -> Optional[dict]:
     """Load a single artifact file and return parsed dict.
@@ -199,7 +254,11 @@ def load_all_artifacts(artifact_dirs: dict, lab_dir: Path) -> dict:
             if not aid:
                 continue
 
-            fpath_rel = str(fpath.relative_to(lab_dir)) if fpath.is_relative_to(lab_dir) else str(fpath)
+            fpath_rel = (
+                str(fpath.relative_to(lab_dir))
+                if fpath.is_relative_to(lab_dir)
+                else str(fpath)
+            )
 
             artifacts[aid] = Artifact(
                 id=aid,

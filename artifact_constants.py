@@ -44,7 +44,15 @@ VALID_STATUSES: Final[dict[str, set[str]]] = {
         "active",
         "draft",
     },
-    "pattern": {"draft", "active", "deprecated", "archived", "accepted", "proposed"},
+    "pattern": {
+        "draft",
+        "active",
+        "deprecated",
+        "archived",
+        "accepted",
+        "proposed",
+        "resolved",
+    },
     "rule": {
         "draft",
         "active",

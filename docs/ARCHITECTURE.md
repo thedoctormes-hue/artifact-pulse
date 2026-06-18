@@ -2,179 +2,101 @@
 
 ## Обзор
 
-Artifact Pulse — система мониторинга здоровья артефактов LabDoctorM. Оперирует markdown-файлами с YAML frontmatter, вычисляет health score (0-100), отслеживает тренды, генерирует алерты.
+artifact-pulse — система мониторинга здоровья артефактов и управления инсайтами лаборатории LabDoctorM.
 
-## Стек
-
-- **Python 3.10+**
-- **PyYAML >= 6.0** — парсинг frontmatter
-- **pytest >= 7.0** — тестирование (dev)
-- **ruff >= 0.4.0** — линтинг (dev)
-- **mypy >= 1.0** — тайпчекинг (dev)
-
-## Entry Points (15)
-
-| Команда | Модуль | Назначение |
-|---------|--------|-----------|
-| `artifact-health` | `artifact_health.py` | 9-мерный health check (0-100) |
-| `artifact-search` | `search_artifacts.py` | Полнотекстовый поиск с индексом |
-| `artifact-links` | `artifact_link_checker.py` | Битые ссылки, orphan-артефакты |
-| `artifact-aging` | `artifact_aging.py` | Старение (active→stale→archived) |
-| `artifact-stats` | `artifact_stats.py` | Ранжирование по цитированию |
-| `artifact-monitor` | `artifact_monitor.py` | Тренды, алерты, история (JSONL) |
-| `artifact-provenance` | `artifact_provenance.py` | Confidence decay, review due dates |
-| `artifact-constraints` | `artifact_constraints.py` | Структурные constraints, циклы |
-| `artifact-graph` | `artifact_graph.py` | DOT/JSON/D3.js визуализация |
-| `artifact-changelog` | `artifact_changelog.py` | Генерация CHANGELOG.md |
-| `artifact-audit` | `audit_report.py` | Комплексный аудит |
-| `artifact-normalize` | `normalize_frontmatter.py` | Валидация + автофикс frontmatter |
-| `artifact-dashboard` | `artifact_dashboard.py` | HTML дашборд с D3.js графом |
-| `artifact-diff` | `artifact_diff.py` | Сравнение двух артефактов |
-| `artifact-watch` | `artifact_watch.py` | Планировщик health check |
-| `artifact-new` | `artifact_new.py` | Генератор шаблонов артефактов |
+Два контура:
+- **Артефакты** — мониторинг ADR, паттернов, правил, инцидентов (health check, граф, старение)
+- **Инсайты** — сбор, дедупликация, консолидация, семантический поиск
 
 ## Компоненты
 
+### Контур артефактов
+
 ```
-┌──────────────────────────────────────────────────────────────┐
-│ CLI Entry Points (15) │
-│ health search links aging stats monitor provenance ... │
-│ constraints graph changelog audit normalize dashboard │
-│ diff watch new │
-└───────────────────────────┬──────────────────────────────────┘
- │
-┌───────────────────────────▼──────────────────────────────────┐
-│ artifact_core.py │
-│ parse_frontmatter() load_all_artifacts() │
-│ validate_frontmatter() ← единая валидация (health/normalize)│
-│ detect_encoding() read_text_safe() │
-└───────────────────────────┬──────────────────────────────────┘
- │
- ┌──────────────────────┼──────────────────────┐
- │ │ │
-┌────▼───────────┐ ┌───────▼──────────┐ ┌───────▼──────────┐
-│ Health Check │ │ Aging │ │ Provenance │
-│ (9 измерений) │ │ │ │ │
-│ frontmatter │ │ active→stale │ │ confidence decay │
-│ links │ │ →archived │ │ last_verified │
-│ aging │ │ days_since() │ │ review_due │
-│ duplicates │ │ count_inbound │ │ verify_artifact()│
-│ code_refs │ │ _links() │ │ │
-│ provenance │ │ analyze_cascade()│ │ │
-│ constraints │ │ │ │ │
-│ insights │ │ │ │ │
-│ infrastructure │ │ │ │ │
-└────────────────┘ └──────────────────┘ └──────────────────┘
-
-┌────────────────┐ ┌──────────────────┐ ┌──────────────────┐
-│ Search │ │ Monitor │ │ Graph │
-│ │ │ │ │ │
-│ build_index() │ │ save_snapshot() │ │ DOT / JSON / │
-│ load_index() │ │ load_history() │ │ HTML (D3.js) │
-│ _dir_finger- │ │ compute_trends() │ │ force-directed │
-│ print() │ │ check_alerts() │ │ simulation │
-│ score_*() │ │ │ │ │
-└────────────────┘ └──────────────────┘ └──────────────────┘
-
-┌────────────────┐ ┌──────────────────┐ ┌──────────────────┐
-│ Diff │ │ Watch │ │ New │
-│ │ │ │ │ │
-│ frontmatter │ │ --once (timer) │ │ auto-ID │
-│ outbound refs │ │ --interval N │ │ frontmatter │
-│ inbound refs │ │ alerts-only │ │ yaml template │
-│ body diff │ │ │ │ --dry-run │
-└────────────────┘ └──────────────────┘ └──────────────────┘
-
-┌────────────────┐ ┌──────────────────┐ ┌──────────────────┐
-│ Normalize │ │ Stats │ │ Dashboard │
-│ │ │ │ │ │
-│ validate_fm() │ │ citations │ │ HTML + D3.js │
-│ fix_frontmatter│ │ rankings │ │ health score │
-│ scan() │ │ composite_score │ │ distributions │
-│ │ │ │ │ attention list │
-└────────────────┘ └──────────────────┘ └──────────────────┘
+artifact_core.py          — Ядро: парсинг frontmatter, загрузка артефактов
+artifact_types.py         — Artifact dataclass (каноническое представление)
+artifact_health.py        — Health check (9 измерений, score 0-100)
+artifact_graph.py         — Граф зависимостей (DOT/JSON/HTML)
+artifact_aging.py         — Старение: active → stale → archived
+artifact_provenance.py    — Происхождение, confidence decay
+artifact_constraints.py   — Структурные ограничения, циклы
+artifact_link_checker.py  — Проверка ссылок, orphans
+artifact_stats.py         — Статистика, рейтинг
+artifact_changelog.py     — Версионирование
+artifact_monitor.py       — Тренды, алерты
+search_artifacts.py       — Полнотекстовый поиск
+normalize_frontmatter.py  — Валидация frontmatter
+audit_report.py           — Комплексный аудит-отчёт
 ```
 
-## Единая валидация frontmatter
+### Контур инсайтов
 
-`validate_frontmatter()` в `artifact_core.py` — единая точка валидации для всех модулей:
-- `artifact_health.check_frontmatter()` — проверяет артефакты + title quality + date format
-- `artifact_new.generate_artifact()` — генерирует с валидным frontmatter
-- Ранее дублировалась в normalize_frontmatter.py и audit_report.py — устранено
-
-## Поток данных
-
-### Health Check (9 измерений)
-1. `load_all_artifacts()` → парсит все .md из `config/artifact_dirs.yaml`
-2. Каждое измерение проверяет свою область (frontmatter, links, aging, duplicates, code_refs, provenance, constraints, insights, infrastructure)
-3. `compute_overall_score()` → взвешенный score 0-100
-4. `save_snapshot()` → запись в `health_history.jsonl` + ротация
-
-### Monitoring
-1. `run_health_snapshot()` — единый вызов для всех 9 измерений (включая provenance и constraints)
-2. `compute_trends()` → velocity, direction (improving/degrading/stable)
-3. `check_alerts()` → пороговые алерты (score < 50 CRITICAL, < 70 WARNING)
-
-### Aging Lifecycle
 ```
-active ──(>90d, 0 inbound)──→ stale ──(>180d)──→ archived
-deprecated ──(>180d)──→ archived
-draft ──(>180d)──→ archived
-```
-Артефакты с >= 2 inbound links никогда не стареют.
-
-### Confidence Decay
-```
-(0-30d) → high
-(30-60d) → medium
-(60-90d) → low
-(90d+) → outdated
+artifact_insights.py       — CRUD, status flow, semantic dedup, CLI
+session_insights_miner.py — Извлечение инсайтов из сессий агентов
+scripts/build_faiss_index.py — Построение FAISS индекса
+scripts/migrate_to_sqlite.py — Миграция JSON → SQLite
 ```
 
-## Конфигурация
+## Хранение данных
 
-Все пути задаются в `config/artifact_dirs.yaml`:
-- `lab_dir` — корень лаборатории
-- `artifact_dirs` — словарь тип → относительный путь
-- `state_files` — пути к файлам состояния
+### SQLite (`insights.db`)
+- WAL mode для безопасной конкурентной записи
+- Таблица `insights`: id, timestamp, content, type, source, status, confirmations, importance, tags, session_id, agent_pair, embedding
+- Индексы: status, type, source
 
-## Файлы состояния
+### FAISS (`insights.faiss`)
+- IndexFlatIP (Inner Product = cosine similarity для normalized vectors)
+- 235 векторов × 1024 dim
+- Обновляется при добавлении новых инсайтов
 
-| Файл | Назначение | Ротация |
-|------|-----------|---------|
-| `health_history.jsonl` | История health checks | 1000 entries / 90 days |
-| `search_index.json` | Поисковый индекс | При изменении файлов |
-| `alerts.json` | Последние алерты | Перезапись |
-| `trends.json` | Последние тренды | Перезапись |
-| `artifact_stats.json` | Статистика (цитирование) | Перезапись |
+### Ollama bge-m3-cpu
+- Локальная embedding модель (CPU-only)
+- Модель: bge-m3-cpu, num_ctx=2048, num_batch=256, num_thread=3
+- API: `POST /api/embeddings`
 
-## Тестирование
+## Status Flow инсайтов
 
-- **124 теста** в `tests/` (108 существующих + 16 новых)
-- `pytest tests/ -v`
+```
+new → verified → artifact
+```
 
-## Ключевые константы
+- **new** — только что добавлен
+- **verified** — подтверждён ≥2 раза (confirmations >= 2)
+- **artifact** — верифицирован + importance >= threshold + trusted source
+- **rejected** — отклонён
+- **archived** — архивирован
 
-Все константы в `artifact_constants.py` — ID паттерны, valid statuses by type, confidence decay rules, review intervals, alert thresholds (WARN=70, CRIT=50), aging thresholds (STALE=90d, ARCHIVE=180d), graph colors/shapes.
+Команды:
+- `verify --id INS-XXX` — increment confirmations, авто new→verified
+- `promote --id INS-XXX` — verified→artifact
+- `consolidate` — массовый переход по всем инсайтам
 
-## Запуск
+## Semantic Deduplication
+
+1. Генерируем embedding нового текста через Ollama (~1 сек)
+2. Ищем в FAISS (cosine similarity, <1ms)
+3. Если cosine >= 0.85 → дубликат, пропускаем
+4. Если cosine < 0.85 → новый, сохраняем
+5. Fallback: точное совпадение по тексту (без Ollama)
+
+## Тесты
 
 ```bash
-# Установка
-pip install -e ".[dev]"
-
-# Health check
-artifact-health
-
-# Сравнение артефактов
-artifact-diff ADR-001 ADR-002
-
-# Health check по расписанию (systemd timer)
-artifact-watch --once
-
-# Создать новый артефакт
-artifact-new --type pattern --title "Описание паттерна"
-
-# HTML дашборд
-artifact-dashboard --output dashboard.html
+python3 -m pytest tests/ -v
+# 167 passed, 10 skipped
 ```
+
+Покрытие:
+- `test_insights.py` — 33 теста: CRUD, status flow, dedup, CLI, edge cases
+- `test_session_miner.py` — security patterns, classification, integration
+- `test_migration_flock.py` — миграция JSON ↔ SQLite, lock-файлы
+- `test_artifact_system.py` — 108 тестов системы артефактов
+
+## Зависимости
+
+- Python 3.10+
+- PyYAML >= 6.0
+- faiss-cpu >= 1.7
+- pytest >= 9.0
+- Ollama (локальный, порт 11434)

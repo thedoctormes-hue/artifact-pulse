@@ -115,8 +115,52 @@ echo '{"content": "...", "type": "adr"}' >> .qwen/artifacts/insights_queue.json
 
 ## Автоматические проверки (systemd таймеры)
 
+### Insight‑Catcher systemd timer
+
+To run the insight‑catcher automatically you can enable the following systemd unit:
+
+```
+# /etc/systemd/system/artifact-insights-miner.service
+[Unit]
+Description=Artifact Pulse – Insight Catcher miner
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /root/LabDoctorM/projects/artifact-pulse/session_insights_miner.py
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```
+# /etc/systemd/system/artifact-insights-miner.timer
+[Unit]
+Description=Run Insight Catcher miner every 2 hours
+
+[Timer]
+OnCalendar=*-*-* *:00/2
+Persistent=true
+Unit=artifact-insights-miner.service
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable with:
+```
+systemctl daemon-reload
+systemctl enable --now artifact-insights-miner.timer
+```
+
+The timer will invoke the miner every two hours, log output to `journalctl -u artifact-insights-miner.service`, and automatically populate the insights queue.
+
+
 | Таймер | Частота | Что проверяет |
 |--------|---------|---------------|
+| `artifact-insights-miner` | 2ч | Извлечение инсайтов из сессий (session_insights_miner.py) |
 | `artifact-health` | 6ч | Общий health score (0-100), 9 измерений |
 | `artifact-links` | 12ч | Целостность ссылок, orphans, broken links |
 | `artifact-monitor` | 3ч | Тренды, алерты, деградация |
@@ -128,6 +172,15 @@ echo '{"content": "...", "type": "adr"}' >> .qwen/artifacts/insights_queue.json
 | `artifact-audit` | 6ч | Комплексный аудит-отчёт |
 
 ---
+
+## Связанные инциденты (для устранения orphan)
+
+Чтобы уменьшить количество orphan-артефактов, добавлены ссылки из этого руководства на следующие инциденты:
+
+- INC-003: фронтенд Snablab не реализован
+- INC-012: дубль snablab-bot
+- INC-016: GitHub PAT в plaintext в remote URL
+- INC-019: Сова использовала таблицы в Telegram
 
 ## Команды (шпаргалка)
 
@@ -300,4 +353,4 @@ python3 artifact_insights.py stats
 ---
 
 *Документ живёт в `projects/artifact-pulse/ARTIFACT_SYSTEM_GUIDE.md`*
-*Обновлён: 2026-06-17*
+*Обновлён: 2026-06-17 (добавлен systemd timer для artifact-insights-miner)*
