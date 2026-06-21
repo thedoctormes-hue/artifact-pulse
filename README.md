@@ -1,3 +1,11 @@
+---
+description: "artifact-pulse — README"
+type: readme
+last_reviewed: 2026-06-21
+last_code_change: 2026-06-21
+status: active
+---
+
 # 🦉 Artifact Pulse v4.2.0
 
 > **Владелец:** DoctorM&Ai | **Статус:** active
