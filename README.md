@@ -1,14 +1,48 @@
 # 🦉 Artifact Pulse v4.2.0
 
-**Система мониторинга здоровья артефактов и управления инсайтами LabDoctorM.**
+> **Владелец:** DoctorM&Ai | **Статус:** active
 
-Два контура:
+## Описание
+
+Система мониторинга здоровья артефактов и управления инсайтами LabDoctorM. Два контура:
 - **Артефакты** — мониторинг ADR, паттернов, правил, инцидентов (health check, граф, старение)
 - **Инсайты** — сбор из сессий, семантическая дедупликация, консолидация, поиск через FAISS + bge-m3
 
+## Архитектура
+
+**Стек:** Python 3.10+, PyYAML
+
+Ядро — `Artifact` dataclass (`artifact_types.py`) с dict-совместимостью (`__getitem__`, `get`).
+Все модули работают с `Artifact` напрямую, без промежуточных адаптеров.
+
+## Разработка
+
+```bash
+# Установка
+pip3 install -e .
+
+# Тесты
+python3 -m pytest tests/ -v
+# 108 tests, all passing
+```
+
+## Деплой
+
+```bash
+# Health check
+artifact-health --verbose
+
+# Мониторинг + алерты
+artifact-monitor
+```
+
 ## Документация
-- `docs/ARCHITECTURE.md` — полная архитектура системы
-- `docs/insights/README.md` — подробная документация по системе инсайтов
+
+- [Архитектура](docs/ARCHITECTURE.md)
+- [Инсайты](docs/insights/README.md)
+- [ADR](docs/ADR/)
+- [CHANGELOG](CHANGELOG.md)
+- [Руководство](ARTIFACT_SYSTEM_GUIDE.md)
 
 Ядро — `Artifact` dataclass (`artifact_types.py`) с dict-совместимостью (`__getitem__`, `get`).
 Все модули работают с `Artifact` напрямую, без промежуточных адаптеров.
