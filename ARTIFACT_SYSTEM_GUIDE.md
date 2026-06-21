@@ -115,52 +115,8 @@ echo '{"content": "...", "type": "adr"}' >> .qwen/artifacts/insights_queue.json
 
 ## Автоматические проверки (systemd таймеры)
 
-### Insight‑Catcher systemd timer
-
-To run the insight‑catcher automatically you can enable the following systemd unit:
-
-```
-# /etc/systemd/system/artifact-insights-miner.service
-[Unit]
-Description=Artifact Pulse – Insight Catcher miner
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/python3 /root/LabDoctorM/projects/artifact-pulse/session_insights_miner.py
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```
-# /etc/systemd/system/artifact-insights-miner.timer
-[Unit]
-Description=Run Insight Catcher miner every 2 hours
-
-[Timer]
-OnCalendar=*-*-* *:00/2
-Persistent=true
-Unit=artifact-insights-miner.service
-
-[Install]
-WantedBy=timers.target
-```
-
-Enable with:
-```
-systemctl daemon-reload
-systemctl enable --now artifact-insights-miner.timer
-```
-
-The timer will invoke the miner every two hours, log output to `journalctl -u artifact-insights-miner.service`, and automatically populate the insights queue.
-
-
 | Таймер | Частота | Что проверяет |
 |--------|---------|---------------|
-| `artifact-insights-miner` | 2ч | Извлечение инсайтов из сессий (session_insights_miner.py) |
 | `artifact-health` | 6ч | Общий health score (0-100), 9 измерений |
 | `artifact-links` | 12ч | Целостность ссылок, orphans, broken links |
 | `artifact-monitor` | 3ч | Тренды, алерты, деградация |
@@ -172,15 +128,6 @@ The timer will invoke the miner every two hours, log output to `journalctl -u ar
 | `artifact-audit` | 6ч | Комплексный аудит-отчёт |
 
 ---
-
-## Связанные инциденты (для устранения orphan)
-
-Чтобы уменьшить количество orphan-артефактов, добавлены ссылки из этого руководства на следующие инциденты:
-
-- INC-003: фронтенд Snablab не реализован
-- INC-012: дубль snablab-bot
-- INC-016: GitHub PAT в plaintext в remote URL
-- INC-019: Сова использовала таблицы в Telegram
 
 ## Команды (шпаргалка)
 
@@ -231,8 +178,8 @@ python3 -m pytest tests/ -v
 
 ```
 active → stale → archived
- ↓
- deprecated → archived
+         ↓
+     deprecated → archived
 ```
 
 - **active** — актуален, используется
@@ -273,84 +220,5 @@ active → stale → archived
 
 ---
 
----
-
-## Insight Catcher Pipeline — Автоматический ловец инсайтов
-
-### Что это
-
-Pipeline для автоматического сбора инсайтов из работы агентов и их превращения в артефакты. Заменяет бывшие Qwen PostToolUse hooks.
-
-### Как работает цикл
-
-```
-Агент обнаруживает инсайт (ошибка, решение, находка, паттерн)
-  → Вызывает: python3 artifact_insights.py add --content "..." --source "agent" --type "finding"
-  → Инсайт записывается в .qwen/artifacts/insights_queue.json
-  → Cron каждые 60 мин: python3 artifact_insights.py consolidate
-  → Связанные инсайты группируются, статус → consolidated
-  → Агент или Доминика создаёт артефакт из консолидированных инсайтов
-  → Артефакт проходит фактчекинг (cron еженедельно)
-  → last_verified обновляется, артефакт остаётся актуальным
-```
-
-### Типы инсайтов
-
-- **error** — ошибка/баг в коде, конфиге, документации
-- **decision** — принятое архитектурное или процессное решение
-- **finding** — результат разведки, поиска, анализа
-- **pattern** — повторяющийся паттерн в работе
-- **anti-pattern** — антипаттерн, чего не стоит делать
-- **insight** — общий инсайт, не попадающий в другие категории
-
-### Критерии хорошего инсайта
-
-- **Конкретный** — не «что-то не так», а «файл X содержит Y → Z»
-- **Воспроизводимый** — другой агент может проверить
-- **Полезный** — помогает избежать ошибки или улучшить процесс
-- **Актуальный** — относится к текущему состоянию системы
-
-### Команды
-
-```bash
-# Добавить инсайт
-python3 artifact_insights.py add \
-  --content "Описание" \
-  --source "dominika" \
-  --type "finding" \
-  --confidence "high" \
-  --context "контекст" \
-  --tags "тег1,тег2"
-
-# Список инсайтов
-python3 artifact_insights.py list --status new --limit 20
-
-# Консолидация (группировка и повышение статуса)
-python3 artifact_insights.py consolidate
-
-# Консолидация без записи (dry-run)
-python3 artifact_insights.py consolidate --dry-run
-
-# Подтвердить инсайт
-python3 artifact_insights.py verify --id INS-XXX
-
-# Статистика
-python3 artifact_insights.py stats
-```
-
-### Cron-задачи
-
-- **artifact-insights-consolidate** — каждые 60 минут, консолидирует новые инсайты
-- **artifact-factcheck** — еженедельно (понедельник 06:00 MSK), проверяет актуальность артефактов
-
-### Важно
-
-- Один инсайт = одна конкретная находка
-- Не записывать очевидное или уже задокументированное
-- При сомнениях — лучше записать, чем пропустить
-- Дубликаты отсеиваются автоматически (content + source)
-
----
-
 *Документ живёт в `projects/artifact-pulse/ARTIFACT_SYSTEM_GUIDE.md`*
-*Обновлён: 2026-06-17 (добавлен systemd timer для artifact-insights-miner)*
+*Обновлён: 2026-06-04*

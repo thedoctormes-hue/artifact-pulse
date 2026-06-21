@@ -9,7 +9,6 @@ artifact_dirs:
   adr: adr
   rule: rules
   spec: specs
-  backlog: specs
   incident: incidents
   metric: metrics
 

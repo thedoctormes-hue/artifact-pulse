@@ -7,6 +7,7 @@ Usage:
   python3 test_artifact_system.py
 """
 
+import os
 import sys
 import json
 import tempfile
@@ -16,7 +17,7 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 
-SCRIPTS_DIR = Path(__file__).resolve().parent.parent
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 
@@ -197,7 +198,7 @@ def patch_dirs(tmpdir):
 class TestArtifactStats(unittest.TestCase):
 
     def test_parse_frontmatter_valid(self):
-        from artifact_core import parse_frontmatter
+        from artifact_stats import parse_frontmatter
         content = '---\nid: PAT-001\ntype: pattern\ntitle: "Test"\nstatus: active\ntags: [test, auto]\n---\n# Body text\n'
         meta, body = parse_frontmatter(content)
         self.assertEqual(meta["id"], "PAT-001")
@@ -207,14 +208,14 @@ class TestArtifactStats(unittest.TestCase):
         self.assertIn("Body text", body)
 
     def test_parse_frontmatter_empty(self):
-        from artifact_core import parse_frontmatter
+        from artifact_stats import parse_frontmatter
         content = "# Just a heading\n\nSome text."
         meta, body = parse_frontmatter(content)
         self.assertEqual(meta, {})
         self.assertIn("Just a heading", body)
 
     def test_parse_frontmatter_tags_list(self):
-        from artifact_core import parse_frontmatter
+        from artifact_stats import parse_frontmatter
         content = '---\nid: PAT-001\ntags: [test, auto, generated]\n---\n# Body\n'
         meta, _ = parse_frontmatter(content)
         self.assertIsInstance(meta["tags"], list)
@@ -242,7 +243,7 @@ class TestArtifactStats(unittest.TestCase):
 class TestArtifactAging(unittest.TestCase):
 
     def test_parse_frontmatter(self):
-        from artifact_core import parse_frontmatter
+        from artifact_aging import parse_frontmatter
         content = '---\nid: PAT-001\ntype: pattern\ntitle: "Test"\nstatus: active\ncreated: 2026-01-01T00:00:00+00:00\n---\n# Body\n'
         meta, body = parse_frontmatter(content)
         self.assertEqual(meta["id"], "PAT-001")
@@ -536,10 +537,7 @@ class TestArtifactChangelog(unittest.TestCase):
         fm = rebuild_frontmatter(meta)
         self.assertIn("id: PAT-001", fm)
         self.assertIn("type: pattern", fm)
-        # Lists are rendered as block style to avoid YAML type coercion
-        self.assertIn("tags:", fm)
-        self.assertIn("- test", fm)
-        self.assertIn("- auto", fm)
+        self.assertIn("tags: [test, auto]", fm)
 
     def test_find_artifact(self):
         from artifact_changelog import find_artifact
@@ -641,6 +639,9 @@ class TestIntegration(unittest.TestCase):
             import artifact_graph
             import artifact_health
 
+            modules = [artifact_stats, artifact_aging, artifact_link_checker,
+                       artifact_graph, artifact_health]
+
             with patch.multiple("artifact_stats", ARTIFACT_DIRS=dirs, LAB_DIR=tmpdir), \
                  patch.multiple("artifact_aging", ARTIFACT_DIRS=dirs, LAB_DIR=tmpdir), \
                  patch.multiple("artifact_link_checker", ARTIFACT_DIRS=dirs, LAB_DIR=tmpdir), \
@@ -649,6 +650,7 @@ class TestIntegration(unittest.TestCase):
 
                 # Load with each module's own loader (they have different formats)
                 from artifact_stats import load_all_artifacts as load_stats
+                from artifact_link_checker import load_all_artifacts as load_links
 
                 arts = load_stats()
                 self.assertEqual(len(arts), 7)
@@ -696,20 +698,17 @@ class TestArtifactProvenance(unittest.TestCase):
         self.ap = ap
 
     def test_provenance_fields_present(self):
-        """Active artifacts should ideally have provenance fields (warning-only check)."""
+        """All real artifacts must have last_verified, confidence, source."""
         artifacts = self.ap.load_all_artifacts()
         for aid, art in artifacts.items():
-            if art.get("status") in ("archived", "rejected"):
-                continue
             meta = art["meta"]
-            # These fields are recommended but not required — just verify no crash
-            _ = meta.get("last_verified", "")
-            _ = meta.get("confidence", "")
-            _ = meta.get("source", "")
+            self.assertIn("last_verified", meta, f"{aid}: missing last_verified")
+            self.assertIn("confidence", meta, f"{aid}: missing confidence")
+            self.assertIn("source", meta, f"{aid}: missing source")
 
     def test_confidence_values_valid(self):
-        """When confidence is set, it must be a valid value (empty is OK)."""
-        valid = {"high", "medium", "low", "outdated", ""}
+        """Confidence must be high, medium, low, or outdated."""
+        valid = ("high", "medium", "low", "outdated")
         artifacts = self.ap.load_all_artifacts()
         for aid, art in artifacts.items():
             c = art["meta"].get("confidence", "")
@@ -723,21 +722,12 @@ class TestArtifactProvenance(unittest.TestCase):
             lv = art["meta"].get("last_verified", "")
             if lv:
                 try:
-                    if isinstance(lv, datetime):
-                        dt = lv
-                    else:
-                        lv_str = str(lv).strip()
-                        if not lv_str:
-                            continue
-                        # Handle date-only (YYYY-MM-DD) by appending time
-                        if len(lv_str) == 10 and lv_str.count("-") == 2:
-                            lv_str = f"{lv_str}T00:00:00+00:00"
-                        dt = datetime.fromisoformat(lv_str.replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(lv.replace("Z", "+00:00"))
                     if dt.tzinfo is None:
                         dt = dt.replace(tzinfo=timezone.utc)
                     self.assertLessEqual(dt, now + timedelta(days=1),
                                          f"{aid}: last_verified in future: {lv}")
-                except (ValueError, TypeError):
+                except ValueError:
                     self.fail(f"{aid}: invalid last_verified format: {lv}")
 
     def test_provenance_report_runs(self):
@@ -834,12 +824,12 @@ class TestArtifactConstraints(unittest.TestCase):
 
     def test_valid_status_values(self):
         """Status must be a known value."""
-        from artifact_constants import ALL_VALID_STATUSES
+        valid = {"active", "draft", "deprecated", "resolved", "proposed", "open", "archived", "accepted", "closed", "pending"}
         artifacts = self.ac.load_all_artifacts()
         for aid, art in artifacts.items():
             status = art["meta"].get("status", "")
             if status:
-                self.assertIn(status, ALL_VALID_STATUSES,
+                self.assertIn(status, valid,
                               f"{aid}: invalid status '{status}'")
 
 
@@ -914,711 +904,6 @@ class TestArtifactMonitor(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════
-# YAML SafeLoad Frontmatter Parser Tests
-# ═══════════════════════════════════════════════════════
-
-class TestYamlSafeLoadParser(unittest.TestCase):
-    """Tests for yaml.safe_load frontmatter parser in artifact_core."""
-
-    def test_simple_frontmatter(self):
-        """Basic key-value frontmatter must parse correctly."""
-        content = """---
-id: PAT-001
-type: pattern
-title: "Test Pattern"
-status: active
-created: 2026-01-01T00:00:00+00:00
-updated: 2026-01-01T00:00:00+00:00
----
-
-# Body
-Some text here."""
-        from artifact_core import parse_frontmatter
-        meta, body = parse_frontmatter(content)
-        self.assertEqual(meta["id"], "PAT-001")
-        self.assertEqual(meta["type"], "pattern")
-        self.assertEqual(meta["title"], "Test Pattern")
-        self.assertIn("Some text here", body)
-
-    def test_multiline_body(self):
-        """Body with multiple paragraphs must be preserved."""
-        content = """---
-id: ADR-001
-type: adr
-title: "Test ADR"
-status: accepted
----
-
-# Context
-
-This is the context paragraph.
-
-## Decision
-
-This is the decision paragraph.
-
-## Consequences
-
-More text here."""
-        from artifact_core import parse_frontmatter
-        meta, body = parse_frontmatter(content)
-        self.assertEqual(meta["id"], "ADR-001")
-        self.assertIn("Context", body)
-        self.assertIn("Decision", body)
-        self.assertIn("Consequences", body)
-
-    def test_yaml_list_values(self):
-        """YAML list values (tags, code_refs) must parse as lists."""
-        content = """---
-id: RUL-001
-type: rule
-title: "Test Rule"
-tags:
-  - security
-  - auth
-code_refs:
-  - src/auth.py
-  - src/middleware.py
----
-# Body"""
-        from artifact_core import parse_frontmatter
-        meta, body = parse_frontmatter(content)
-        self.assertIsInstance(meta["tags"], list)
-        self.assertEqual(len(meta["tags"]), 2)
-        self.assertEqual(meta["tags"][0], "security")
-        self.assertIsInstance(meta["code_refs"], list)
-        self.assertEqual(len(meta["code_refs"]), 2)
-
-    def test_yaml_multiline_string(self):
-        """YAML multiline string (literal block scalar) must parse."""
-        content = """---
-id: PAT-002
-type: pattern
-title: "Multiline Pattern"
-description: |
-  This is a long description
-  that spans multiple lines
-  and preserves line breaks.
-status: active
----
-# Body"""
-        from artifact_core import parse_frontmatter
-        meta, body = parse_frontmatter(content)
-        self.assertIn("long description", meta["description"])
-        self.assertIn("multiple lines", meta["description"])
-
-    def test_empty_frontmatter(self):
-        """Empty frontmatter block must return empty dict, full content as body."""
-        content = """---
----
-# Just a heading"""
-        from artifact_core import parse_frontmatter
-        meta, body = parse_frontmatter(content)
-        self.assertEqual(meta, {})
-        self.assertIn("Just a heading", body)
-
-    def test_no_frontmatter(self):
-        """Content without frontmatter must return empty dict, full content as body."""
-        content = "# No Frontmatter\n\nJust plain markdown."
-        from artifact_core import parse_frontmatter
-        meta, body = parse_frontmatter(content)
-        self.assertEqual(meta, {})
-        self.assertEqual(body, content)
-
-    def test_invalid_yaml_returns_empty(self):
-        """Invalid YAML must return empty dict (not crash)."""
-        content = """---
-id: PAT-001
-  bad_indent: [unclosed
-  broken: {yaml: ---
----
-# Body"""
-        from artifact_core import parse_frontmatter
-        meta, body = parse_frontmatter(content)
-        # yaml.safe_load raises YAMLError for malformed YAML; parser returns {}
-        self.assertIsInstance(meta, dict)
-
-    def test_yaml_special_characters_in_title(self):
-        """Title with colons, quotes, and special chars must parse."""
-        lines = [
-            "---",
-            "id: ADR-003",
-            "type: adr",
-            "title: \"Use O'Reilly's Pattern: Best Practice (v2.0)\"",
-            "status: accepted",
-            "---",
-            "# Body",
-        ]
-        content = "\n".join(lines)
-        from artifact_core import parse_frontmatter
-        meta, body = parse_frontmatter(content)
-        self.assertIn("O'Reilly", meta["title"])
-        self.assertIn("Best Practice", meta["title"])
-
-    def test_yaml_boolean_and_numeric(self):
-        """Boolean and numeric YAML values must be native Python types."""
-        content = """---
-id: MET-001
-type: metric
-title: "Test Metric"
-active: true
-count: 42
-ratio: 3.14
----
-# Body"""
-        from artifact_core import parse_frontmatter
-        meta, body = parse_frontmatter(content)
-        self.assertIs(meta["active"], True)
-        self.assertEqual(meta["count"], 42)
-        self.assertAlmostEqual(meta["ratio"], 3.14)
-
-    def test_parse_frontmatter_with_raw(self):
-        """parse_frontmatter_with_raw must return raw frontmatter text."""
-        content = """---
-id: PAT-005
-type: pattern
-title: "Raw Test"
-status: active
----
-
-# Body text"""
-        from artifact_core import parse_frontmatter_with_raw
-        meta, body, raw = parse_frontmatter_with_raw(content)
-        self.assertEqual(meta["id"], "PAT-005")
-        self.assertIn("id: PAT-005", raw)
-        self.assertIn("title: \"Raw Test\"", raw)
-        self.assertIn("Body text", body)
-
-    def test_parse_frontmatter_with_raw_no_fm(self):
-        """parse_frontmatter_with_raw without frontmatter returns empty raw."""
-        content = "# No frontmatter"
-        from artifact_core import parse_frontmatter_with_raw
-        meta, body, raw = parse_frontmatter_with_raw(content)
-        self.assertEqual(meta, {})
-        self.assertEqual(raw, "")
-
-    def test_unicode_frontmatter(self):
-        """Unicode characters in frontmatter must parse correctly."""
-        content = """---
-id: PAT-006
-type: pattern
-title: "Юникод: тестирование русского текста"
-tags:
-  - тест
-  - юникод
-status: active
----
-# Тело документа"""
-        from artifact_core import parse_frontmatter
-        meta, body = parse_frontmatter(content)
-        self.assertIn("Юникод", meta["title"])
-        self.assertIn("тест", meta["tags"])
-
-    def test_frontmatter_with_comments(self):
-        """YAML comments in frontmatter must be ignored."""
-        content = """---
-id: PAT-007
-type: pattern
-title: "Comment Test"
-# This is a comment
-status: active
----
-# Body"""
-        from artifact_core import parse_frontmatter
-        meta, body = parse_frontmatter(content)
-        self.assertEqual(meta["id"], "PAT-007")
-        self.assertEqual(meta["status"], "active")
-        self.assertNotIn("comment", meta)
-
-    def test_second_delimiter_not_on_first_line(self):
-        """Second --- delimiter must not be matched on line 0."""
-        content = """---
-id: PAT-008
-title: "Test"
----
-# Body
----
-More content after horizontal rule."""
-        from artifact_core import parse_frontmatter
-        meta, body = parse_frontmatter(content)
-        self.assertEqual(meta["id"], "PAT-008")
-        self.assertIn("horizontal rule", body)
-
-    def test_yaml_null_values(self):
-        """Null YAML values must map to None."""
-        content = """---
-id: PAT-009
-type: pattern
-title: "Null Test"
-source:
-confidence:
----
-# Body"""
-        from artifact_core import parse_frontmatter
-        meta, body = parse_frontmatter(content)
-        self.assertIsNone(meta["source"])
-        self.assertIsNone(meta["confidence"])
-
-
-# ═══════════════════════════════════════════════════════
-# TestHistoryRotation
-# ═══════════════════════════════════════════════════════
-
-class TestHistoryRotation(unittest.TestCase):
-    """Tests for health_history.jsonl rotation."""
-
-    def setUp(self):
-        self.tmpdir = Path(tempfile.mkdtemp(prefix="history_rot_"))
-        self.history_file = self.tmpdir / "health_history.jsonl"
-
-    def tearDown(self):
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-
-    def _write_entries(self, n: int):
-        """Write N history entries."""
-        now = datetime.now(timezone.utc)
-        with open(self.history_file, "w", encoding="utf-8") as f:
-            for i in range(n):
-                ts = (now - timedelta(hours=n - i)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-                entry = json.dumps({"timestamp": ts, "overall_score": 80 + (i % 20)}, ensure_ascii=False)
-                f.write(entry + "\n")
-
-    def test_rotation_trims_by_count(self):
-        """Rotation must trim entries exceeding HISTORY_MAX_ENTRIES."""
-        import artifact_monitor as mon
-        self._write_entries(mon.HISTORY_MAX_ENTRIES + 100)
-        mon.HISTORY_FILE = self.history_file
-        mon._rotate_history()
-        lines = [ln for ln in self.history_file.read_text().splitlines() if ln.strip()]
-        self.assertLessEqual(len(lines), mon.HISTORY_MAX_ENTRIES)
-
-    def test_rotation_trims_by_age(self):
-        """Rotation must trim entries older than HISTORY_MAX_DAYS."""
-        import artifact_monitor as mon
-        self._write_entries(50)
-        # Prepend an old entry (will be at start of file, read last in reversed loop)
-        old_ts = (datetime.now(timezone.utc) - timedelta(days=mon.HISTORY_MAX_DAYS + 10)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-        old_entry = json.dumps({"timestamp": old_ts, "overall_score": 50}, ensure_ascii=False)
-        content = self.history_file.read_text()
-        self.history_file.write_text(old_entry + "\n" + content)
-        mon.HISTORY_FILE = self.history_file
-        mon._rotate_history()
-        lines = self.history_file.read_text().splitlines()
-        for line in lines:
-            if line.strip():
-                entry = json.loads(line)
-                entry_dt = datetime.fromisoformat(entry["timestamp"].replace("+00:00", "+00:00"))
-                age = (datetime.now(timezone.utc) - entry_dt).days
-                self.assertLessEqual(age, mon.HISTORY_MAX_DAYS)
-
-    def test_rotation_preserves_recent(self):
-        """Rotation must keep recent entries intact."""
-        import artifact_monitor as mon
-        self._write_entries(10)
-        mon.HISTORY_FILE = self.history_file
-        mon._rotate_history()
-        lines = [ln for ln in self.history_file.read_text().splitlines() if ln.strip()]
-        self.assertEqual(len(lines), 10)  # all recent, should not be trimmed
-
-    def test_rotation_nonexistent_file(self):
-        """Rotation must not crash if history file does not exist."""
-        import artifact_monitor as mon
-        mon.HISTORY_FILE = self.history_file / "nonexistent.jsonl"
-        mon._rotate_history()  # must not raise
-
-
-# ═══════════════════════════════════════════════════════
-# TestDirFingerprint
-# ═══════════════════════════════════════════════════════
-
-class TestDirFingerprint(unittest.TestCase):
-    """Tests for O(directories) stale detection in search_artifacts."""
-
-    def setUp(self):
-        self.tmpdir = Path(tempfile.mkdtemp(prefix="fingerprint_"))
-        self.patterns_dir = self.tmpdir / "patterns"
-        self.patterns_dir.mkdir()
-
-    def tearDown(self):
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-
-    def test_fingerprint_detects_new_file(self):
-        """Fingerprint changes when a new file is added."""
-        import search_artifacts as sa
-        with patch.object(sa, "LAB_DIR", self.tmpdir), \
-             patch.object(sa, "ARTIFACT_DIRS", ["patterns"]):
-            mtime1, count1 = sa._dir_fingerprint()
-            self.assertEqual(count1, 0)
-
-            (self.patterns_dir / "test.md").write_text("# Hello")
-            sa.__dict__.pop("_fingerprint_cache", None)
-            mtime2, count2 = sa._dir_fingerprint()
-            self.assertEqual(count2, 1)
-            self.assertGreater(mtime2, mtime1)
-
-    def test_fingerprint_detects_modified_file(self):
-        """Fingerprint changes when an existing file is modified."""
-        import search_artifacts as sa
-        with patch.object(sa, "LAB_DIR", self.tmpdir), \
-             patch.object(sa, "ARTIFACT_DIRS", ["patterns"]):
-            (self.patterns_dir / "test.md").write_text("# Hello")
-            mtime1, count1 = sa._dir_fingerprint()
-            self.assertEqual(count1, 1)
-
-            import time
-            time.sleep(0.01)  # ensure mtime differs
-            (self.patterns_dir / "test.md").write_text("# Modified!")
-            sa.__dict__.pop("_fingerprint_cache", None)
-            mtime2, count2 = sa._dir_fingerprint()
-            self.assertEqual(count2, 1)
-            self.assertGreaterEqual(mtime2, mtime1)
-
-
-# ═══════════════════════════════════════════════════════
-# TestNeedsQuoting
-# ═══════════════════════════════════════════════════════
-
-class TestNeedsQuoting(unittest.TestCase):
-    """Tests for _needs_quoting helper in artifact_changelog."""
-
-    def test_date_colon_string_needs_quoting(self):
-        from artifact_changelog import _needs_quoting
-        self.assertTrue(_needs_quoting("2026-06-09: test change entry"))
-
-    def test_plain_string_no_quoting(self):
-        from artifact_changelog import _needs_quoting
-        self.assertFalse(_needs_quoting("simpletext"))
-
-    def test_tag_no_quoting(self):
-        from artifact_changelog import _needs_quoting
-        self.assertFalse(_needs_quoting("test"))
-
-    def test_colon_no_digit_needs_quoting(self):
-        from artifact_changelog import _needs_quoting
-        self.assertTrue(_needs_quoting("some: text"))
-
-    def test_space_needs_quoting(self):
-        from artifact_changelog import _needs_quoting
-        self.assertTrue(_needs_quoting("hello world"))
-
-    def test_empty_no_quoting(self):
-        from artifact_changelog import _needs_quoting
-        self.assertFalse(_needs_quoting(""))
-
-
-# ═══════════════════════════════════════════════════════
-# TestDaysSinceEdgeCases
-# ═══════════════════════════════════════════════════════
-
-class TestDaysSinceEdgeCases(unittest.TestCase):
-    """Edge cases for days_since with various input types."""
-
-    def test_datetime_object(self):
-        from artifact_aging import days_since
-        dt = datetime.now(timezone.utc) - timedelta(days=5)
-        result = days_since(dt)
-        self.assertEqual(result, 5)
-
-    def test_date_only_string(self):
-        from artifact_aging import days_since
-        old = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%d")
-        result = days_since(old)
-        self.assertGreaterEqual(result, 10)
-
-    def test_iso_datetime_string(self):
-        from artifact_aging import days_since
-        old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
-        result = days_since(old)
-        self.assertGreaterEqual(result, 3)
-
-    def test_return_type_is_int(self):
-        from artifact_aging import days_since
-        result = days_since(datetime.now(timezone.utc))
-        self.assertIsInstance(result, int)
-
-
-# ═══════════════════════════════════════════════════════
-# TestCascadeAnalysis
-# ═══════════════════════════════════════════════════════
-
-class TestCascadeAnalysis(unittest.TestCase):
-    """Tests for cascade analysis in artifact_aging."""
-
-    def test_get_inbound_sources_basic(self):
-        from artifact_aging import get_inbound_sources
-        artifacts = {
-            "ADR-001": {"_body": "See PAT-001."},
-            "PAT-001": {"_body": "No refs."},
-            "RUL-001": {"_body": "Depends on ADR-001 and PAT-001."},
-        }
-        sources = get_inbound_sources(artifacts)
-        self.assertIn("ADR-001", sources["PAT-001"])
-        self.assertIn("RUL-001", sources["ADR-001"])
-        self.assertIn("RUL-001", sources["PAT-001"])
-
-    def test_get_inbound_sources_no_self_ref(self):
-        from artifact_aging import get_inbound_sources
-        artifacts = {
-            "ADR-001": {"_body": "Self reference ADR-001 should be ignored."},
-        }
-        sources = get_inbound_sources(artifacts)
-        self.assertNotIn("ADR-001", sources["ADR-001"])
-
-    def test_get_inbound_sources_empty_body(self):
-        from artifact_aging import get_inbound_sources
-        artifacts = {
-            "ADR-001": {"_body": ""},
-            "PAT-001": {},
-        }
-        sources = get_inbound_sources(artifacts)
-        self.assertEqual(sources["ADR-001"], [])
-        self.assertEqual(sources["PAT-001"], [])
-
-    def test_analyze_cascade_empty_details(self):
-        from artifact_aging import analyze_cascade
-        artifacts = {
-            "ADR-001": {"_body": "See PAT-001."},
-            "PAT-001": {"_body": ""},
-        }
-        result = analyze_cascade(artifacts, [])
-        self.assertEqual(result, [])
-
-    def test_analyze_cascade_with_affected(self):
-        from artifact_aging import analyze_cascade
-        artifacts = {
-            "ADR-001": {"_body": "See PAT-001."},
-            "PAT-001": {"_body": ""},
-            "RUL-001": {"_body": "Depends on ADR-001."},
-        }
-        details = [{"id": "ADR-001", "action": "archive"}]
-        result = analyze_cascade(artifacts, details)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["target"], "ADR-001")
-        self.assertEqual(result[0]["action"], "archive")
-        self.assertIn("RUL-001", result[0]["affected"])
-
-    def test_analyze_cascade_no_affected(self):
-        from artifact_aging import analyze_cascade
-        artifacts = {
-            "ADR-001": {"_body": "No one references this."},
-            "PAT-001": {"_body": ""},
-        }
-        details = [{"id": "ADR-001", "action": "stale"}]
-        result = analyze_cascade(artifacts, details)
-        self.assertEqual(result, [])
-
-    def test_analyze_cascade_multiple_targets(self):
-        from artifact_aging import analyze_cascade
-        artifacts = {
-            "ADR-001": {"_body": ""},
-            "PAT-001": {"_body": ""},
-            "RUL-001": {"_body": "Depends on ADR-001 and PAT-001."},
-        }
-        details = [
-            {"id": "ADR-001", "action": "archive"},
-            {"id": "PAT-001", "action": "stale"},
-        ]
-        result = analyze_cascade(artifacts, details)
-        self.assertEqual(len(result), 2)
-        targets = {r["target"] for r in result}
-        self.assertEqual(targets, {"ADR-001", "PAT-001"})
-
-
-# ═══════════════════════════════════════════════════════
-# TestAutoFixFrontmatter
-# ═══════════════════════════════════════════════════════
-
-class TestAutoFixFrontmatter(unittest.TestCase):
-    """Tests for auto-fix in normalize_frontmatter."""
-
-    def test_normalize_id_lowercase_prefix(self):
-        from normalize_frontmatter import _normalize_id
-        result = _normalize_id("pat-001", "PAT")
-        self.assertEqual(result, "PAT-001")
-
-    def test_normalize_id_spaces(self):
-        from normalize_frontmatter import _normalize_id
-        result = _normalize_id("PAT 001", "PAT")
-        self.assertEqual(result, "PAT-001")
-
-    def test_normalize_id_already_correct(self):
-        from normalize_frontmatter import _normalize_id
-        result = _normalize_id("PAT-001", "PAT")
-        self.assertEqual(result, "PAT-001")
-
-    def test_normalize_id_no_dash(self):
-        from normalize_frontmatter import _normalize_id
-        result = _normalize_id("PAT001", "PAT")
-        self.assertIsNone(result)
-
-    def test_rebuild_frontmatter_preserves_body(self):
-        from normalize_frontmatter import _rebuild_frontmatter
-        content = "---\nid: PAT-001\ntype: pattern\ntitle: Test\n---\n# Hello\nBody text."
-        fm = {"id": "PAT-001", "type": "pattern", "title": "Fixed"}
-        result = _rebuild_frontmatter(content, fm)
-        self.assertIn("# Hello", result)
-        self.assertIn("Body text", result)
-        self.assertIn("title: Fixed", result)
-
-    def test_rebuild_frontmatter_no_frontmatter(self):
-        from normalize_frontmatter import _rebuild_frontmatter
-        content = "# No frontmatter here"
-        result = _rebuild_frontmatter(content, {"id": "X"})
-        self.assertIsNone(result)
-
-    def test_fix_frontmatter_invalid_status(self):
-        from normalize_frontmatter import fix_frontmatter
-        content = "---\nid: PAT-001\ntype: pattern\ntitle: Test\nstatus: bogus\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n# Body"
-        fm = {"id": "PAT-001", "type": "pattern", "title": "Test", "status": "bogus", "created": "2026-01-01", "updated": "2026-01-01"}
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-            f.write(content)
-            f.flush()
-            fixed, fixes = fix_frontmatter(fm, content, Path(f.name))
-            self.assertTrue(fixed)
-            self.assertTrue(any("draft" in fix for fix in fixes))
-
-    def test_fix_frontmatter_missing_dates(self):
-        from normalize_frontmatter import fix_frontmatter
-        content = "---\nid: PAT-001\ntype: pattern\ntitle: Test\nstatus: active\n---\n# Body"
-        fm = {"id": "PAT-001", "type": "pattern", "title": "Test", "status": "active"}
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-            f.write(content)
-            f.flush()
-            fixed, fixes = fix_frontmatter(fm, content, Path(f.name))
-            self.assertTrue(fixed)
-            self.assertTrue(any("created" in fix for fix in fixes))
-
-
-# ═══════════════════════════════════════════════════════
-# TestDashboard
-# ═══════════════════════════════════════════════════════
-
-class TestDashboard(unittest.TestCase):
-    """Tests for artifact_dashboard."""
-
-    def test_generate_dashboard_returns_html(self):
-        from artifact_dashboard import generate_dashboard
-        artifacts = {
-            "ADR-001": {
-                "type": "adr",
-                "meta": {"title": "Test ADR", "status": "active", "confidence": "high"},
-                "body": "See PAT-001.",
-            },
-            "PAT-001": {
-                "type": "pattern",
-                "meta": {"title": "Test Pattern", "status": "active", "confidence": "medium"},
-                "body": "",
-            },
-        }
-        html = generate_dashboard(artifacts)
-        self.assertIn("<!DOCTYPE html>", html)
-        self.assertIn("ADR-001", html)
-        self.assertIn("PAT-001", html)
-
-    def test_dashboard_health_score_present(self):
-        from artifact_dashboard import generate_dashboard
-        artifacts = {
-            "ADR-001": {
-                "type": "adr",
-                "meta": {"title": "Test", "status": "active", "confidence": "high"},
-                "body": "",
-            },
-        }
-        html = generate_dashboard(artifacts)
-        self.assertIn("Health Score", html)
-        self.assertIn("/100", html)
-
-    def test_dashboard_type_distribution(self):
-        from artifact_dashboard import _compute_type_distribution
-        artifacts = {
-            "ADR-001": {"type": "adr", "meta": {}},
-            "ADR-002": {"type": "adr", "meta": {}},
-            "PAT-001": {"type": "pattern", "meta": {}},
-        }
-        dist = _compute_type_distribution(artifacts)
-        self.assertEqual(dist["adr"], 2)
-        self.assertEqual(dist["pattern"], 1)
-
-    def test_dashboard_status_distribution(self):
-        from artifact_dashboard import _compute_status_distribution
-        artifacts = {
-            "ADR-001": {"meta": {"status": "active"}},
-            "ADR-002": {"meta": {"status": "stale"}},
-            "PAT-001": {"meta": {"status": "active"}},
-        }
-        dist = _compute_status_distribution(artifacts)
-        self.assertEqual(dist["active"], 2)
-        self.assertEqual(dist["stale"], 1)
-
-    def test_dashboard_top_cited(self):
-        from artifact_dashboard import _compute_inbound_links, _top_cited
-        artifacts = {
-            "ADR-001": {"type": "adr", "meta": {"title": "Popular"}, "body": ""},
-            "PAT-001": {"type": "pattern", "meta": {"title": "Cites ADR"}, "body": "See ADR-001."},
-            "RUL-001": {"type": "rule", "meta": {"title": "Also cites ADR"}, "body": "Depends on ADR-001."},
-        }
-        inbound = _compute_inbound_links(artifacts)
-        top = _top_cited(artifacts, inbound, n=5)
-        self.assertEqual(top[0]["id"], "ADR-001")
-        self.assertEqual(top[0]["inbound"], 2)
-
-    def test_dashboard_needs_attention(self):
-        from artifact_dashboard import _compute_inbound_links, _needs_attention
-        from datetime import timedelta
-        old_date = (datetime.now(timezone.utc) - timedelta(days=200)).strftime("%Y-%m-%d")
-        artifacts = {
-            "ADR-001": {
-                "type": "adr",
-                "meta": {"title": "Old", "status": "stale", "confidence": "low", "updated": old_date},
-                "body": "",
-            },
-            "ADR-002": {
-                "type": "adr",
-                "meta": {"title": "Healthy", "status": "active", "confidence": "high", "updated": "2026-06-01"},
-                "body": "",
-            },
-        }
-        inbound = _compute_inbound_links(artifacts)
-        attention = _needs_attention(artifacts, inbound)
-        ids = [a["id"] for a in attention]
-        self.assertIn("ADR-001", ids)
-        self.assertNotIn("ADR-002", ids)
-
-    def test_dashboard_graph_data(self):
-        from artifact_dashboard import _build_graph_data
-        artifacts = {
-            "ADR-001": {"type": "adr", "meta": {}, "body": "See PAT-001."},
-            "PAT-001": {"type": "pattern", "meta": {}, "body": ""},
-        }
-        graph = _build_graph_data(artifacts)
-        self.assertEqual(len(graph["nodes"]), 2)
-        self.assertEqual(len(graph["links"]), 1)
-        self.assertEqual(graph["links"][0]["source"], "ADR-001")
-        self.assertEqual(graph["links"][0]["target"], "PAT-001")
-
-    def test_dashboard_empty_artifacts(self):
-        from artifact_dashboard import generate_dashboard
-        html = generate_dashboard({})
-        self.assertIn("<!DOCTYPE html>", html)
-
-    def test_dashboard_output_to_file(self):
-        from artifact_dashboard import generate_dashboard
-        artifacts = {
-            "ADR-001": {
-                "type": "adr",
-                "meta": {"title": "Test", "status": "active", "confidence": "high"},
-                "body": "",
-            },
-        }
-        with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
-            path = f.name
-        generate_dashboard(artifacts, output_path=path)
-        content = Path(path).read_text()
-        self.assertIn("ADR-001", content)
-        Path(path).unlink()
-
-
-# ═══════════════════════════════════════════════════════
 # Run
 # ═══════════════════════════════════════════════════════
 
@@ -1637,14 +922,6 @@ if __name__ == "__main__":
     suite.addTests(loader.loadTestsFromTestCase(TestArtifactProvenance))
     suite.addTests(loader.loadTestsFromTestCase(TestArtifactConstraints))
     suite.addTests(loader.loadTestsFromTestCase(TestArtifactMonitor))
-    suite.addTests(loader.loadTestsFromTestCase(TestYamlSafeLoadParser))
-    suite.addTests(loader.loadTestsFromTestCase(TestHistoryRotation))
-    suite.addTests(loader.loadTestsFromTestCase(TestDirFingerprint))
-    suite.addTests(loader.loadTestsFromTestCase(TestNeedsQuoting))
-    suite.addTests(loader.loadTestsFromTestCase(TestDaysSinceEdgeCases))
-    suite.addTests(loader.loadTestsFromTestCase(TestCascadeAnalysis))
-    suite.addTests(loader.loadTestsFromTestCase(TestAutoFixFrontmatter))
-    suite.addTests(loader.loadTestsFromTestCase(TestDashboard))
 
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)

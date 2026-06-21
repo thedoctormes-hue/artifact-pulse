@@ -269,6 +269,8 @@ category: ${category}
 author: evolve_orchestrator
 created: ${now}
 updated: ${now}
+last_verified: ${now}
+confidence: medium
 confirmations: ${confirmations}
 source_insight: ${insight_id}
 source: evolve_orchestrator
@@ -318,6 +320,8 @@ author: evolve_orchestrator
 created: ${now}
 updated: ${now}
 confirmations: ${confirmations}
+last_verified: ${now}
+confidence: medium
 source_insight: ${insight_id}
 source: evolve_orchestrator
 tags: [architecture, decision, auto-generated]
@@ -340,9 +344,10 @@ ${content}
 - 📋 Что нужно сделать — определить из контекста
 
 ## Альтернативы
-| Вариант | Плюсы | Минусы | Почему отклонён |
-|---------|-------|--------|-----------------|
-| <!-- TODO --> | | | |
+- **Вариант 1:** <!-- TODO: описание -->
+  - Плюсы: <!-- TODO -->
+  - Минусы: <!-- TODO -->
+  - Статус: отклонён / принят
 
 ## Связанные инсайты
 - ${insight_id} — ${title}
@@ -370,6 +375,8 @@ author: evolve_orchestrator
 created: ${now}
 updated: ${now}
 confirmations: ${confirmations}
+last_verified: ${now}
+confidence: medium
 source_insight: ${insight_id}
 source: evolve_orchestrator
 tags: [${category}, auto-generated]
@@ -412,6 +419,8 @@ author: evolve_orchestrator
 created: ${now}
 updated: ${now}
 confirmations: ${confirmations}
+last_verified: ${now}
+confidence: medium
 source_insight: ${insight_id}
 source: evolve_orchestrator
 tags: [specification, auto-generated]
@@ -457,6 +466,8 @@ author: evolve_orchestrator
 created: ${now}
 updated: ${now}
 confirmations: ${confirmations}
+last_verified: ${now}
+confidence: medium
 source_insight: ${insight_id}
 source: evolve_orchestrator
 tags: [incident, auto-generated]
@@ -501,6 +512,8 @@ author: evolve_orchestrator
 created: ${now}
 updated: ${now}
 confirmations: ${confirmations}
+last_verified: ${now}
+confidence: medium
 source_insight: ${insight_id}
 source: evolve_orchestrator
 tags: [metric, auto-generated]

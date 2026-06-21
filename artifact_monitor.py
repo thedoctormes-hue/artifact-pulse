@@ -19,29 +19,33 @@ Usage:
 """
 
 import sys
+import os
 import json
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from collections import defaultdict
 from config_loader import get_lab_dir, get_state_file
-from artifact_health import (
-    load_all_artifacts, check_frontmatter, check_links, check_aging,
-    check_duplicates, check_code_refs, check_insights_queue,
-    check_infrastructure, check_provenance_dimension, check_constraints_dimension,
-    compute_overall_score,
-)
-from artifact_constants import (
-    ALERT_WARN_SCORE,
-    ALERT_CRIT_SCORE,
-    ALERT_BROKEN_LINKS,
-    ALERT_ORPHANS,
-    ALERT_OUTDATED_PCT,
-    HISTORY_MAX_ENTRIES,
-    HISTORY_MAX_DAYS,
-)
 
 LAB_DIR = get_lab_dir()
 HISTORY_FILE = get_state_file("health_history") or LAB_DIR / ".qwen/artifacts/health_history.jsonl"
 ALERTS_FILE = get_state_file("alerts") or LAB_DIR / ".qwen/artifacts/alerts.json"
 TRENDS_FILE = get_state_file("trends") or LAB_DIR / ".qwen/artifacts/trends.json"
+
+# Alert thresholds
+ALERT_WARN_SCORE = 70
+ALERT_CRIT_SCORE = 50
+ALERT_BROKEN_LINKS = 5
+ALERT_ORPHANS = 10
+ALERT_OUTDATED_PCT = 30
+
+# Import health check functions (from same src/ directory)
+from artifact_health import (
+    load_all_artifacts, check_frontmatter, check_links, check_aging,
+    check_duplicates, check_code_refs, check_insights_queue,
+    check_infrastructure, compute_overall_score,
+)
+from artifact_provenance import generate_report as provenance_report
+from artifact_constraints import run_all_checks as constraint_checks
 
 
 def run_health_snapshot() -> dict:
@@ -54,84 +58,40 @@ def run_health_snapshot() -> dict:
         "aging": check_aging(artifacts),
         "duplicates": check_duplicates(artifacts),
         "code_refs": check_code_refs(artifacts),
-        "provenance": check_provenance_dimension(artifacts),
-        "constraints": check_constraints_dimension(artifacts),
         "insights": check_insights_queue(),
         "infrastructure": check_infrastructure(),
     }
     overall = compute_overall_score(checks)
 
+    # Provenance
+    prov_report = provenance_report()
+
+    # Constraints
+    constraint_report = constraint_checks(artifacts)
+
     snapshot = {
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00"),
         "overall_score": overall,
         "checks": checks,
-        "provenance_score": checks["provenance"]["score"],
-        "constraint_score": checks["constraints"]["score"],
+        "provenance_score": prov_report.get("score", 0),
+        "constraint_score": constraint_report.get("score", 0),
         "total_artifacts": len(artifacts),
         "broken_links": checks["links"]["broken_count"],
         "orphans": checks["links"]["orphan_count"],
         "stale": checks["aging"]["stale_count"],
-        "outdated_confidence": checks["provenance"].get("outdated_count", 0),
-        "constraint_errors": checks["constraints"]["errors"],
-        "constraint_warnings": checks["constraints"]["warnings"],
+        "outdated_confidence": prov_report.get("by_confidence", {}).get("outdated", 0),
+        "constraint_errors": constraint_report.get("errors", 0),
+        "constraint_warnings": constraint_report.get("warnings", 0),
     }
 
     return snapshot
 
 
-def _rotate_history():
-    """Trim history file to HISTORY_MAX_ENTRIES and HISTORY_MAX_DAYS."""
-    if not HISTORY_FILE.exists():
-        return
-    try:
-        lines = HISTORY_FILE.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return
-    if len(lines) <= 1:
-        return
-
-    cutoff = datetime.now(timezone.utc) - timedelta(days=HISTORY_MAX_DAYS)
-    needs_rotate = len(lines) > HISTORY_MAX_ENTRIES
-    if not needs_rotate:
-        # Check if any entry exceeds age limit
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-                entry_dt = datetime.fromisoformat(entry["timestamp"].replace("+00:00", "+00:00"))
-                if entry_dt < cutoff:
-                    needs_rotate = True
-                    break
-            except (json.JSONDecodeError, KeyError, ValueError):
-                pass
-    if not needs_rotate:
-        return
-
-    kept = []
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-            entry_dt = datetime.fromisoformat(entry["timestamp"].replace("+00:00", "+00:00"))
-            if entry_dt >= cutoff and len(kept) < HISTORY_MAX_ENTRIES:
-                kept.append(line)
-        except (json.JSONDecodeError, KeyError, ValueError):
-            kept.append(line)  # keep unparseable lines to avoid data loss
-
-    kept.reverse()
-    HISTORY_FILE.write_text("\n".join(kept) + "\n" if kept else "", encoding="utf-8")
-
-
 def save_snapshot(snapshot: dict):
-    """Append snapshot to history file, then rotate."""
+    """Append snapshot to history file."""
     HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(HISTORY_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(snapshot, ensure_ascii=False) + "\n")
-    _rotate_history()
 
 
 def load_history(days: int = 30) -> list:
@@ -340,19 +300,7 @@ def main():
     parser.add_argument("--history", action="store_true", help="Show history")
     parser.add_argument("--days", type=int, default=30, help="History period in days")
     parser.add_argument("--json", action="store_true", help="JSON output")
-    parser.add_argument("--rotate", action="store_true", help="Rotate history file and exit")
     args = parser.parse_args()
-
-    if args.rotate:
-        before = 0
-        if HISTORY_FILE.exists():
-            before = len(HISTORY_FILE.read_text(encoding="utf-8").splitlines())
-        _rotate_history()
-        after = 0
-        if HISTORY_FILE.exists():
-            after = len([line for line in HISTORY_FILE.read_text(encoding="utf-8").splitlines() if line.strip()])
-        print(f"Rotation complete: {before} → {after} entries (max {HISTORY_MAX_ENTRIES}, {HISTORY_MAX_DAYS}d)")
-        return
 
     if args.history:
         history = load_history(args.days)

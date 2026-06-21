@@ -4,8 +4,7 @@ After=network.target
 
 [Service]
 Type=oneshot
-ExecStartPre=/bin/mkdir -p /root/LabDoctorM/.qwen/artifacts
-ExecStart=/bin/bash -c 'cd /root/LabDoctorM/projects/artifact-pulse && python3 artifact_health.py --json > /root/LabDoctorM/.qwen/artifacts/health_latest.json 2>&1'
+ExecStart=/bin/bash -c 'cd /root/LabDoctorM/projects/artifact-pulse && python3 src/artifact_health.py --json > /root/LabDoctorM/.qwen/artifacts/health_latest.json 2>&1'
 User=root
 WorkingDirectory=/root/LabDoctorM
 StandardOutput=journal

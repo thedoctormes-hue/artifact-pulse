@@ -13,22 +13,38 @@ Usage:
 """
 
 import sys
+import os
+import re
 import json
+from pathlib import Path
 from datetime import datetime, timezone
 from config_loader import get_lab_dir, get_artifact_dirs, get_state_file
-from artifact_core import (
-    load_all_artifacts as _canonical_load_all,
-)
-from artifact_constants import REF_PATTERN_LOOSE as REF_PATTERN
+from artifact_core import parse_frontmatter, load_all_artifacts as _canonical_load_all
 
 LAB_DIR = get_lab_dir()
-ARTIFACT_DIRS = get_artifact_dirs()
+_dirs = get_artifact_dirs()
+_dirs["backlog"] = LAB_DIR / "specs"  # backlog items live in specs/
+ARTIFACT_DIRS = _dirs
 STATS_FILE = get_state_file("artifact_stats") or LAB_DIR / ".qwen/artifacts/artifact_stats.json"
 
+TEMPLATE_NAMES = {"template", "шаблон", "readme"}
 
-def load_all_artifacts() -> dict:
+# Pattern to match artifact references like PAT-001, ADR-012, RUL-003, etc.
+REF_PATTERN = re.compile(r"\b((?:PAT|ADR|RUL|BL|INS|INC|SPEC|MET)-[0-9]+)\b")
+
+
+def load_all_artifacts() -> dict[str, dict]:
     """Load all artifacts keyed by their ID."""
-    return _canonical_load_all(ARTIFACT_DIRS, LAB_DIR)
+    raw = _canonical_load_all(ARTIFACT_DIRS, LAB_DIR)
+    # Adapt canonical format to stats module's expected structure
+    artifacts = {}
+    for aid, art in raw.items():
+        meta = dict(art["meta"])
+        meta["_file"] = art["file"]
+        meta["_body"] = art["body"]
+        meta["_type"] = art["type"]
+        artifacts[aid] = meta
+    return artifacts
 
 
 def compute_stats(artifacts: dict[str, dict]) -> dict:
@@ -37,8 +53,8 @@ def compute_stats(artifacts: dict[str, dict]) -> dict:
     inbound = {aid: [] for aid in artifacts}
     outbound = {aid: [] for aid in artifacts}
 
-    for aid, art in artifacts.items():
-        body = art.body
+    for aid, meta in artifacts.items():
+        body = meta.get("_body", "")
         refs = set(REF_PATTERN.findall(body))
         refs.discard(aid)  # skip self-references
         for ref in refs:
@@ -50,20 +66,20 @@ def compute_stats(artifacts: dict[str, dict]) -> dict:
     now = datetime.now(timezone.utc)
     stats = {}
 
-    for aid, art in artifacts.items():
-        created_str = art.get("created", "")
+    for aid, meta in artifacts.items():
+        created_str = meta.get("created", "")
         age_days = 0
         if created_str:
             try:
-                created = datetime.fromisoformat(str(created_str).replace("+00:00", "+00:00"))
+                created = datetime.fromisoformat(created_str.replace("+00:00", "+00:00"))
                 age_days = (now - created).days
             except (ValueError, TypeError):
                 pass
 
-        confirmations = int(art.get("confirmations", 0) or 0)
+        confirmations = int(meta.get("confirmations", 0) or 0)
         in_count = len(inbound[aid])
         out_count = len(outbound[aid])
-        status = str(art.get("status", "")).lower()
+        status = str(meta.get("status", "")).lower()
 
         # Composite score
         score = 0.0
@@ -81,9 +97,9 @@ def compute_stats(artifacts: dict[str, dict]) -> dict:
 
         stats[aid] = {
             "id": aid,
-            "type": art.type,
-            "title": art.get("title", "?")[:60],
-            "status": art.get("status", "?"),
+            "type": meta.get("_type", "?"),
+            "title": meta.get("title", "?")[:60],
+            "status": meta.get("status", "?"),
             "confirmations": confirmations,
             "inbound": in_count,
             "outbound": out_count,
@@ -91,7 +107,7 @@ def compute_stats(artifacts: dict[str, dict]) -> dict:
             "outbound_to": outbound[aid],
             "age_days": age_days,
             "score": round(score, 1),
-            "file": art.file,
+            "file": meta.get("_file", "?"),
         }
 
     return stats

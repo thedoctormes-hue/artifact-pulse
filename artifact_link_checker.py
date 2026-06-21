@@ -13,22 +13,26 @@ Usage:
 """
 
 import sys
+import os
 import re
 import json
+from pathlib import Path
 from datetime import datetime, timezone
 from collections import defaultdict
 from config_loader import get_lab_dir, get_artifact_dirs
-from artifact_core import (
-    load_all_artifacts as _canonical_load_all,
-)
-from artifact_constants import (
-    REF_PATTERN_LOOSE,
-    MD_LINK_PATTERN,
-    WIKI_LINK_PATTERN,
-)
+from artifact_core import parse_frontmatter, load_all_artifacts as _canonical_load_all
 
 LAB_DIR = get_lab_dir()
 ARTIFACT_DIRS = get_artifact_dirs()
+
+# Match artifact IDs: PAT-001, ADR-012, RUL-005, BL-028, INC-003, MET-001
+ID_PATTERN = re.compile(r"\b([A-Z]{2,4}-\d{3,4})\b")
+# Match markdown links: [text](path)
+MD_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+# Match wiki-style links: [[ART-001]]
+WIKI_LINK_PATTERN = re.compile(r"\[\[([A-Z]{2,4}-\d{3,4})\]\]")
+
+TEMPLATE_NAMES = {"template", "шаблон", "readme"}
 
 
 def load_all_artifacts() -> dict[str, dict]:
@@ -41,12 +45,12 @@ def extract_links(content: str) -> set[str]:
     links = set()
 
     # Direct ID references (PAT-001, ADR-012, etc.)
-    for m in REF_PATTERN_LOOSE.finditer(content):
+    for m in ID_PATTERN.finditer(content):
         links.add(m.group(1))
 
     # Markdown links that contain artifact IDs
     for text, href in MD_LINK_PATTERN.findall(content):
-        for m in REF_PATTERN_LOOSE.finditer(text + " " + href):
+        for m in ID_PATTERN.finditer(text + " " + href):
             links.add(m.group(1))
 
     # Wiki-style links
@@ -178,11 +182,11 @@ def format_report(report: dict) -> str:
     lines = [
         "═══ ARTIFACT LINK CHECKER REPORT ═══",
         f"Generated: {report['timestamp']}",
-        "",
+        f"",
         f"Artifacts: {report['total_artifacts']} total, {report['linked_artifacts']} linked",
         f"Isolation rate: {report['isolation_rate']}%",
         f"Total links: {report['total_links']}",
-        "",
+        f"",
     ]
 
     # Broken links

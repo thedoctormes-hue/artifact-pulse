@@ -2,38 +2,33 @@
 """audit_report.py — аудит артефактов LabDoctorM: frontmatter, orphans, stale, duplicates."""
 
 import json
+import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from config_loader import get_lab_dir
-from normalize_frontmatter import scan, validate, read_text_safe
-from artifact_core import parse_frontmatter
+from config_loader import get_lab_dir, get_state_file
 
 BASE = get_lab_dir()
 _report_dir_default = BASE / ".qwen/artifacts/audits"
 REPORT_DIR = Path(sys.argv[1]) if len(sys.argv) > 1 else _report_dir_default
+_normalize_dir = Path(__file__).resolve().parent
+NORMALIZE_SCRIPT = _normalize_dir / "normalize_frontmatter.py"
 
 # ── 1. Frontmatter validation ──────────────────────
 def check_frontmatter():
     try:
-        files = scan(str(BASE))
-        total = len(files)
-        errors_count = 0
-        for f in files:
-            try:
-                content, encoding = read_text_safe(f)
-            except Exception:
-                errors_count += 1
-                continue
-            fm, _ = parse_frontmatter(content)
-            if not fm:
-                errors_count += 1
-                continue
-            errs, _ = validate(fm, encoding=encoding, fpath=f)
-            if errs:
-                errors_count += 1
-        return {"total_files": total, "errors": errors_count, "ok": errors_count == 0}
+        result = subprocess.run(
+            [sys.executable, str(NORMALIZE_SCRIPT), "--check"],
+            capture_output=True, text=True, timeout=30
+        )
+        output = result.stdout + result.stderr
+        total_m = re.search(r"Total:\s*(\d+)\s*files scanned", output)
+        errors_m = re.search(r"Errors:\s*(\d+)", output)
+        total = int(total_m.group(1)) if total_m else -1
+        errors = int(errors_m.group(1)) if errors_m else -1
+        return {"total_files": total, "errors": errors, "ok": errors == 0}
     except Exception as e:
         return {"total_files": -1, "errors": -1, "ok": False, "error": str(e)}
 

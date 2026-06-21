@@ -13,30 +13,17 @@ Usage:
 
 import sys
 import os
+import re
+import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from config_loader import get_lab_dir, get_artifact_dirs, get_state_file
-from artifact_core import (
-    parse_frontmatter_with_raw, load_all_artifacts as _canonical_load_all,
-)
+from artifact_core import parse_frontmatter_with_raw, load_all_artifacts as _canonical_load_all
 
 LAB_DIR = get_lab_dir()
 ARTIFACT_DIRS = get_artifact_dirs()
 CHANGELOG_FILE = get_state_file("changelog") or LAB_DIR / "ARTIFACT_CHANGELOG.md"
-
-
-def _needs_quoting(value: str) -> bool:
-    """Check if a string value needs quoting in YAML to avoid type coercion."""
-    if not value:
-        return False
-    # Values starting with digits and containing colons (like history entries
-    # "2026-06-09: something") are parsed as datetime by yaml.safe_load.
-    # Quote them to preserve as strings.
-    if value[0].isdigit() and ":" in value:
-        return True
-    if " " in value or ":" in value:
-        return True
-    return False
+TEMPLATE_NAMES = {"template", "шаблон", "readme"}
 
 
 def rebuild_frontmatter(metadata: dict) -> str:
@@ -46,16 +33,9 @@ def rebuild_frontmatter(metadata: dict) -> str:
         if key.startswith("_"):
             continue
         if isinstance(value, list):
-            # Use block style for lists to avoid YAML type coercion of items
-            # (e.g. "2026-06-09: text" in history would be parsed as datetime key)
-            lines.append(f"{key}:")
-            for item in value:
-                item_str = str(item)
-                if _needs_quoting(item_str):
-                    lines.append(f'  - "{item_str}"')
-                else:
-                    lines.append(f"  - {item_str}")
-        elif isinstance(value, str) and _needs_quoting(value):
+            items = ", ".join(str(v) for v in value)
+            lines.append(f"{key}: [{items}]")
+        elif isinstance(value, str) and (" " in value or ":" in value):
             lines.append(f'{key}: "{value}"')
         else:
             lines.append(f"{key}: {value}")

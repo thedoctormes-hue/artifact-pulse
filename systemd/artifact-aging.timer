@@ -5,7 +5,6 @@ Description=LabDoctorM Artifact Aging — ежедневно в 03:00
 OnCalendar=*-*-* 03:00:00
 Persistent=true
 RandomizedDelaySec=600
-FixedRandomDelay=true
 
 [Install]
 WantedBy=timers.target

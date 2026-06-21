@@ -3,7 +3,7 @@
 import yaml
 from pathlib import Path
 
-_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "artifact_dirs.yaml"
+_CONFIG_PATH = Path(__file__).resolve().parent / "config" / "artifact_dirs.yaml"
 
 def load_config():
     """Загружает конфиг из YAML. Возвращает dict с lab_dir, artifact_dirs, state_files."""

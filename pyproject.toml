@@ -1,81 +1,26 @@
-[build-system]
-requires = ["setuptools>=64", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "artifact-pulse"
-version = "4.2.0"
+version = "4.0.0"
 description = "Система мониторинга здоровья артефактов LabDoctorM"
 requires-python = ">=3.10"
 dependencies = [
     "pyyaml>=6.0",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0",
-    "ruff>=0.4.0",
-    "mypy>=1.0",
-]
-
-[tool.setuptools]
-py-modules = [
-    "artifact_health",
-    "search_artifacts",
-    "artifact_link_checker",
-    "artifact_aging",
-    "artifact_stats",
-    "artifact_monitor",
-    "artifact_provenance",
-    "artifact_constraints",
-    "artifact_graph",
-    "artifact_changelog",
-    "audit_report",
-    "normalize_frontmatter",
-    "artifact_dashboard",
-    "artifact_diff",
-    "artifact_watch",
-    "artifact_new",
-    "artifact_core",
-    "artifact_constants",
-    "artifact_types",
-    "config_loader",
-]
-
 [project.scripts]
-artifact-health = "artifact_health:main"
-artifact-search = "search_artifacts:main"
-artifact-links = "artifact_link_checker:main"
-artifact-aging = "artifact_aging:main"
-artifact-stats = "artifact_stats:main"
-artifact-monitor = "artifact_monitor:main"
-artifact-provenance = "artifact_provenance:main"
-artifact-constraints = "artifact_constraints:main"
-artifact-graph = "artifact_graph:main"
-artifact-changelog = "artifact_changelog:main"
-artifact-audit = "audit_report:main"
-artifact-normalize = "normalize_frontmatter:main"
-artifact-dashboard = "artifact_dashboard:main"
-artifact-diff = "artifact_diff:main"
-artifact-watch = "artifact_watch:main"
-artifact-new = "artifact_new:main"
+artifact-health = "src.artifact_health:main"
+artifact-search = "src.search_artifacts:main"
+artifact-links = "src.artifact_link_checker:main"
+artifact-aging = "src.artifact_aging:main"
+artifact-stats = "src.artifact_stats:main"
+artifact-monitor = "src.artifact_monitor:main"
+artifact-provenance = "src.artifact_provenance:main"
+artifact-constraints = "src.artifact_constraints:main"
+artifact-graph = "src.artifact_graph:main"
+artifact-changelog = "src.artifact_changelog:main"
+artifact-audit = "src.audit_report:main"
+artifact-normalize = "src.normalize_frontmatter:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-
-[tool.ruff]
-target-version = "py310"
-
-[tool.ruff.lint]
-ignore = ["E501"]
-
-[tool.mypy]
-python_version = "3.10"
-warn_unused_configs = true
-ignore_missing_imports = true
-follow_imports = "skip"
-disallow_untyped_defs = false
-disallow_any_generics = false
-check_untyped_defs = false
-disable_error_code = ["var-annotated", "index", "operator", "attr-defined", "assignment"]

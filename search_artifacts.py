@@ -17,28 +17,28 @@ Examples:
 """
 
 import sys
+import os
 import re
 import json
 import hashlib
+from pathlib import Path
 from datetime import datetime
 from config_loader import get_lab_dir, get_artifact_dirs, get_state_file
-from artifact_core import load_all_artifacts as _canonical_load_all
+from artifact_core import parse_frontmatter, load_all_artifacts as _canonical_load_all
 
 LAB_DIR = get_lab_dir()
 ARTIFACT_DIRS = get_artifact_dirs()
 INDEX_FILE = get_state_file("search_index") or LAB_DIR / ".qwen/artifacts/search_index.json"
+TEMPLATE_NAMES = {"template", "шаблон", "readme"}
 
 
 def build_index() -> dict:
     """Build search index from all artifacts. Returns index dict."""
-    mtime, count = _dir_fingerprint()
     artifacts = _canonical_load_all(ARTIFACT_DIRS, LAB_DIR)
 
     index = {
         "built_at": datetime.now().isoformat(),
         "total": len(artifacts),
-        "dir_mtime": mtime,
-        "dir_count": count,
         "entries": {},
     }
 
@@ -78,34 +78,24 @@ def build_index() -> dict:
     return index
 
 
-def _dir_fingerprint() -> tuple[float, int]:
-    """Return (max_mtime, file_count) across all artifact dirs — O(directories) not O(files)."""
-    max_mtime = 0.0
-    count = 0
-    for d in ARTIFACT_DIRS:
-        p = LAB_DIR / d
-        if not p.is_dir():
-            continue
-        for f in p.rglob("*.md"):
-            try:
-                st = f.stat()
-                max_mtime = max(max_mtime, st.st_mtime)
-                count += 1
-            except OSError:
-                pass
-    return max_mtime, count
-
-
 def load_index() -> dict:
-    """Load index from disk, rebuild if stale (O(directories) fingerprint, not O(files))."""
+    """Load index from disk, rebuild if stale."""
     if INDEX_FILE.exists():
         try:
             index = json.loads(INDEX_FILE.read_text())
-            if index.get("total", 0) > 0 and index.get("dir_mtime") is not None:
-                cur_mtime, cur_count = _dir_fingerprint()
-                if cur_mtime == index["dir_mtime"] and cur_count == index.get("dir_count", 0):
-                    return index
-        except (json.JSONDecodeError, KeyError, TypeError):
+            # Check if any artifact file changed since index build
+            stale = False
+            for aid, entry in index.get("entries", {}).items():
+                fpath = LAB_DIR / entry["file"]
+                if not fpath.exists():
+                    stale = True
+                    break
+                if fpath.stat().st_mtime != entry.get("mtime", 0):
+                    stale = True
+                    break
+            if not stale and index.get("total", 0) > 0:
+                return index
+        except (json.JSONDecodeError, KeyError):
             pass
 
     # Rebuild
@@ -115,26 +105,101 @@ def load_index() -> dict:
     return index
 
 
-def load_artifacts() -> list:
+def load_artifacts() -> list[dict]:
     """Load all artifacts from all directories."""
     raw = _canonical_load_all(ARTIFACT_DIRS, LAB_DIR)
-    return list(raw.values())
+    artifacts = []
+    for aid, art in raw.items():
+        meta = dict(art["meta"])
+        meta["_file"] = art["file"]
+        meta["_body"] = art["body"]
+        meta["_size"] = len(art["body"])
+        artifacts.append(meta)
+    return artifacts
 
 
-def _score_terms(entry: dict, query_words: list[str], title: str, body_words: set, tags_str: str, aid: str) -> float:
-    """Shared scoring logic for index entries and artifact dicts."""
+def score_artifact(artifact: dict, query_words: list[str]) -> float:
+    """Score artifact relevance to query. Higher = more relevant."""
     score = 0.0
+    title = str(artifact.get("title", "")).lower()
+    body = artifact.get("_body", "").lower()
+    tags = artifact.get("tags", [])
+    if isinstance(tags, str):
+        tags = [tags]
+    tags_str = " ".join(str(t).lower() for t in tags)
+
     for word in query_words:
         word_lower = word.lower()
+
+        # Exact title match = highest score
         if word_lower in title:
             score += 10.0
+
+        # Tag match = high score
         if word_lower in tags_str:
             score += 8.0
+
+        # Body match = base score
+        count = body.count(word_lower)
+        if count > 0:
+            score += min(count * 2.0, 20.0)  # cap at 20 per word
+
+        # ID match (exact)
+        aid = str(artifact.get("id", "")).lower()
+        if word_lower == aid:
+            score += 50.0
+
+    # Boost by confirmations
+    confirmations = int(artifact.get("confirmations", 0) or 0)
+    score += confirmations * 2.0
+
+    # Penalize drafts/deprecated
+    status = str(artifact.get("status", "")).lower()
+    if status == "draft":
+        score *= 0.7
+    elif status in ("deprecated", "rejected"):
+        score *= 0.3
+
+    return score
+
+
+def score_index_entry(entry: dict, query_words: list[str]) -> float:
+    """Score index entry relevance to query."""
+    score = 0.0
+    title = entry.get("title", "").lower()
+    title_words = set(entry.get("title_words", []))
+    body_words = set(entry.get("words", []))
+    tags = entry.get("tags", [])
+    if isinstance(tags, str):
+        tags = [tags]
+    tags_str = " ".join(str(t).lower() for t in tags)
+
+    for word in query_words:
+        word_lower = word.lower()
+
+        # Title word match
+        if word_lower in title_words:
+            score += 10.0
+        elif word_lower in title:
+            score += 8.0
+
+        # Tag match
+        if word_lower in tags_str:
+            score += 8.0
+
+        # Body word match
         if word_lower in body_words:
             score += 3.0
-        if word_lower == aid.lower():
+
+        # ID match (exact)
+        aid = entry.get("id", "").lower()
+        if word_lower == aid:
             score += 50.0
+
+    # Boost by confirmations
     score += entry.get("confirmations", 0) * 2.0
+
+    # Penalize drafts/deprecated/archived
     status = str(entry.get("status", "")).lower()
     if status == "draft":
         score *= 0.7
@@ -142,44 +207,6 @@ def _score_terms(entry: dict, query_words: list[str], title: str, body_words: se
         score *= 0.3
     elif status == "stale":
         score *= 0.5
-    return score
-
-
-def score_artifact(artifact: dict, query_words: list[str]) -> float:
-    """Score artifact relevance to query. Higher = more relevant."""
-    title = str(artifact.get("title", "")).lower()
-    tags = artifact.get("tags", [])
-    if isinstance(tags, str):
-        tags = [tags]
-    tags_str = " ".join(str(t).lower() for t in tags)
-
-    # Build body words set from body
-    body = artifact.body.lower()
-    body_words = set(re.findall(r"[a-zA-Zа-яёА-ЯЁ]{3,}", body))
-
-    entry = {
-        "status": artifact.get("status", ""),
-        "confirmations": int(artifact.get("confirmations", 0) or 0),
-    }
-    return _score_terms(entry, query_words, title, body_words, tags_str, str(artifact.get("id", "")))
-
-
-def score_index_entry(entry: dict, query_words: list[str]) -> float:
-    """Score index entry relevance to query."""
-    title = entry.get("title", "").lower()
-    body_words = set(entry.get("words", []))
-    tags = entry.get("tags", [])
-    if isinstance(tags, str):
-        tags = [tags]
-    tags_str = " ".join(str(t).lower() for t in tags)
-
-    score = _score_terms(entry, query_words, title, body_words, tags_str, str(entry.get("id", "")))
-
-    # Bonus: title_words pre-tokenized match (index-specific optimization)
-    title_words = set(entry.get("title_words", []))
-    for word in query_words:
-        if word.lower() in title_words:
-            score += 2.0  # small bonus for pre-tokenized title match
 
     return score
 

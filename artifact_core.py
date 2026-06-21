@@ -1,67 +1,37 @@
 """artifact_core.py — общие функции для всех модулей Artifact Pulse.
 
 Содержит:
-- parse_frontmatter() — парсинг YAML frontmatter из .md файлов (yaml.safe_load)
+- parse_frontmatter() — парсинг YAML frontmatter из .md файлов
 - load_artifact_file() — загрузка одного артефакта
 - detect_encoding() / read_text_safe() — детекция кодировки
-- validate_frontmatter() — единая валидация frontmatter (используется health, normalize, audit)
+- ID_PATTERN, REF_PATTERN, TEMPLATE_NAMES — общие константы
 """
 
 import re
-import yaml
 from pathlib import Path
 from typing import Optional
 
-from artifact_constants import (
-    ID_PATTERN,
-    TEMPLATE_NAMES,
-    VALID_STATUSES,
-    TYPE_PREFIX,
-)
-from artifact_types import Artifact
+# ── Constants ──────────────────────────────────────────────────
+
+ID_PATTERN = re.compile(r"^([A-Z]{2,4}-\d{3,4})$")
+REF_PATTERN = re.compile(r"\b([A-Z]{2,4}-\d{3,4})\b")
+REF_PATTERN_LOOSE = re.compile(r"\b((?:PAT|ADR|RUL|BL|INS|INC|SPEC|MET)-[0-9]+)\b")
+
+TEMPLATE_NAMES = {"template", "шаблон", "readme"}
 
 # ── Frontmatter ────────────────────────────────────────────────
 
-
-def _sanitize_fm_value(val: str) -> str:
-    """Wrap a YAML value in double quotes if it contains ':' and is not already quoted."""
-    val = val.strip()
-    if not val:
-        return val
-    if (val.startswith('"') and val.endswith('"')) or (
-        val.startswith("'") and val.endswith("'")
-    ):
-        return val  # already quoted
-    if ":" in val:
-        # Escape any existing double quotes inside the value
-        val = val.replace('"', '\\"')
-        return f'"{val}"'
-    return val
-
-
-def _sanitize_frontmatter_text(fm_text: str) -> str:
-    """Pre-process frontmatter text so values with colons are quoted.
-
-    Operates line by line: for 'key: value' lines, the value portion
-    is wrapped in quotes when it contains an unquoted colon.
-    """
-    lines = fm_text.splitlines()
-    out = []
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("-") or ": " not in stripped:
-            out.append(line)
-            continue
-        key, value = line.split(": ", 1)
-        out.append(f"{key}: {_sanitize_fm_value(value)}")
-    return "\n".join(out) + "\n"
-
-
 def parse_frontmatter(content: str) -> tuple[dict, str]:
-    """Parse YAML frontmatter from markdown content using yaml.safe_load.
+    """Parse YAML frontmatter from markdown content.
 
     Returns:
         (metadata_dict, body_string)
+
+    Supports:
+        - key: value
+        - key: "quoted value"
+        - key: 'quoted value'
+        - key: [list, of, values]
     """
     if not content.startswith("---"):
         return {}, content
@@ -71,22 +41,9 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
         return {}, content
 
     fm_text = content[3:end].strip()
-    body = content[end + 3 :].strip()
+    body = content[end + 3:].strip()
 
-    try:
-        metadata = yaml.safe_load(fm_text) or {}
-        if not isinstance(metadata, dict):
-            metadata, body = {}, content
-    except yaml.YAMLError:
-        # Retry with sanitized values (quote values containing ':')
-        try:
-            fm_text = _sanitize_frontmatter_text(fm_text)
-            metadata = yaml.safe_load(fm_text) or {}
-            if not isinstance(metadata, dict):
-                metadata, body = {}, content
-        except yaml.YAMLError:
-            metadata = {}
-
+    metadata = _parse_yaml_block(fm_text)
     return metadata, body
 
 
@@ -104,26 +61,61 @@ def parse_frontmatter_with_raw(content: str) -> tuple[dict, str, str]:
         return {}, content, ""
 
     fm_text = content[3:end].strip()
-    body = content[end + 3 :].strip()
+    body = content[end + 3:].strip()
 
-    try:
-        metadata = yaml.safe_load(fm_text) or {}
-        if not isinstance(metadata, dict):
-            metadata, body, fm_text = {}, content, ""
-    except yaml.YAMLError:
-        try:
-            fm_text = _sanitize_frontmatter_text(fm_text)
-            metadata = yaml.safe_load(fm_text) or {}
-            if not isinstance(metadata, dict):
-                metadata, body, fm_text = {}, content, ""
-        except yaml.YAMLError:
-            metadata = {}
-
+    metadata = _parse_yaml_block(fm_text)
     return metadata, body, fm_text
 
 
-# ── Encoding detection ─────────────────────────────────────────
+def _parse_yaml_block(text: str) -> dict:
+    """Parse a simple YAML block (frontmatter) into a dict.
 
+    Supports:
+        - key: value
+        - key: "quoted value"
+        - key: 'quoted value'
+        - key: [inline, list]
+        - key:\n  - item1\n  - item2   (multi-line list)
+    """
+    metadata = {}
+    lines = text.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            i += 1
+            continue
+        if ":" not in stripped:
+            i += 1
+            continue
+        key, _, value = stripped.partition(":")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+
+        # Multi-line list: key:\n  - item\n  - item
+        if not value and i + 1 < len(lines) and lines[i + 1].strip().startswith("- "):
+            items = []
+            i += 1
+            while i < len(lines) and lines[i].strip().startswith("- "):
+                item = lines[i].strip()[2:].strip().strip('"').strip("'")
+                if item:
+                    items.append(item)
+                i += 1
+            metadata[key] = items
+            continue
+
+        # Inline list: [a, b, c]
+        if value.startswith("[") and value.endswith("]"):
+            value = [v.strip().strip('"').strip("'") for v in value[1:-1].split(",") if v.strip()]
+
+        metadata[key] = value
+        i += 1
+
+    return metadata
+
+
+# ── Encoding detection ─────────────────────────────────────────
 
 def detect_encoding(fpath: Path) -> str:
     """Detect file encoding. Returns encoding name.
@@ -134,16 +126,16 @@ def detect_encoding(fpath: Path) -> str:
     3. Fallback: latin-1 (never fails, maps bytes 1:1)
     """
     raw = fpath.read_bytes()
-    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return "utf-16"
-    if raw.startswith(b"\xef\xbb\xbf"):
-        return "utf-8-sig"
+    if raw.startswith((b'\xff\xfe', b'\xfe\xff')):
+        return 'utf-16'
+    if raw.startswith(b'\xef\xbb\xbf'):
+        return 'utf-8-sig'
     try:
-        raw.decode("utf-8")
-        return "utf-8"
+        raw.decode('utf-8')
+        return 'utf-8'
     except UnicodeDecodeError:
         pass
-    return "latin-1"
+    return 'latin-1'
 
 
 def read_text_safe(fpath: Path) -> tuple:
@@ -152,53 +144,10 @@ def read_text_safe(fpath: Path) -> tuple:
     try:
         return fpath.read_text(encoding=enc), enc
     except (OSError, UnicodeDecodeError):
-        return fpath.read_bytes().decode(
-            "latin-1", errors="replace"
-        ), "latin-1-fallback"
-
-
-# ── Unified Validation ─────────────────────────────────────────
-
-
-def validate_frontmatter(
-    fm: dict, encoding: str = "utf-8", fpath=None
-) -> tuple[list[str], list[str]]:
-    """Единая функция валидации frontmatter для всех модулей.
-
-    Returns (errors, warnings).
-    """
-    errors: list[str] = []
-    warnings: list[str] = []
-
-    if encoding not in ("utf-8", "utf-8-sig"):
-        warnings.append(f"file encoding is '{encoding}', expected utf-8")
-
-    aid = str(fm.get("id", ""))
-    atype = str(fm.get("type", ""))
-    status = str(fm.get("status", ""))
-
-    # Required fields
-    required = ["type", "id", "title", "status", "created", "updated"]
-    for field in required:
-        val = fm.get(field)
-        if val is None or str(val).strip() == "":
-            errors.append(f"missing required field: {field}")
-
-    # ID format
-    prefix = TYPE_PREFIX.get(atype, "")
-    if aid and prefix and not re.match(rf"^{re.escape(prefix)}-\d{{3,4}}$", aid):
-        errors.append(f"id '{aid}' doesn't match expected format '{prefix}-NNN'")
-
-    # Status validity
-    valid = VALID_STATUSES.get(atype, [])
-    if valid and status not in valid:
-        errors.append(f"status '{status}' not valid for type '{atype}'. Valid: {valid}")
-
-    return errors, warnings
+        return fpath.read_bytes().decode('latin-1', errors='replace'), 'latin-1-fallback'
 
 
 # ── File loading ───────────────────────────────────────────────
-
 
 def load_artifact_file(fpath: Path) -> Optional[dict]:
     """Load a single artifact file and return parsed dict.
@@ -235,6 +184,7 @@ def load_all_artifacts(artifact_dirs: dict, lab_dir: Path) -> dict:
     template_names = TEMPLATE_NAMES
 
     for atype, dirpath in artifact_dirs.items():
+        dirpath = Path(dirpath) if isinstance(dirpath, str) else dirpath
         if not dirpath.exists():
             continue
         for fpath in dirpath.glob("*.md"):
@@ -254,30 +204,26 @@ def load_all_artifacts(artifact_dirs: dict, lab_dir: Path) -> dict:
             if not aid:
                 continue
 
-            fpath_rel = (
-                str(fpath.relative_to(lab_dir))
-                if fpath.is_relative_to(lab_dir)
-                else str(fpath)
-            )
+            fpath_rel = str(fpath.relative_to(lab_dir)) if fpath.is_relative_to(lab_dir) else str(fpath)
 
-            artifacts[aid] = Artifact(
-                id=aid,
-                type=meta.get("type", atype),
-                title=meta.get("title", fpath.stem),
-                status=meta.get("status", "unknown"),
-                severity=meta.get("severity", ""),
-                file=fpath_rel,
-                fpath=fpath,
-                meta=meta,
-                body=body,
-                full_content=content,
-                created=meta.get("created", ""),
-                updated=meta.get("updated", ""),
-                last_verified=meta.get("last_verified", ""),
-                confidence=meta.get("confidence", ""),
-                source=meta.get("source", ""),
-                tags=meta.get("tags", []),
-                encoding=encoding,
-            )
+            artifacts[aid] = {
+                "id": aid,
+                "type": meta.get("type", atype),
+                "title": meta.get("title", fpath.stem),
+                "status": meta.get("status", "unknown"),
+                "severity": meta.get("severity", ""),
+                "file": fpath_rel,
+                "fpath": fpath,
+                "meta": meta,
+                "body": body,
+                "full_content": content,
+                "created": meta.get("created", ""),
+                "updated": meta.get("updated", ""),
+                "last_verified": meta.get("last_verified", ""),
+                "confidence": meta.get("confidence", ""),
+                "source": meta.get("source", ""),
+                "tags": meta.get("tags", []),
+                "encoding": encoding,
+            }
 
     return artifacts

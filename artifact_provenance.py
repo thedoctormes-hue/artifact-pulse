@@ -14,21 +14,41 @@ Usage:
 """
 
 import sys
+import os
 import re
 import json
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from config_loader import get_lab_dir, get_artifact_dirs
-from artifact_core import (
-    load_all_artifacts as _canonical_load_all,
-)
-from artifact_constants import (
-    CONFIDENCE_DECAY,
-    REVIEW_INTERVALS,
-)
+from artifact_core import parse_frontmatter, load_all_artifacts as _canonical_load_all
 
 LAB_DIR = get_lab_dir()
 ARTIFACT_DIRS = get_artifact_dirs()
+
+TEMPLATE_NAMES = {"template", "шаблон", "readme"}
+ID_PATTERN = re.compile(r"^([A-Z]{2,4}-\d{3,4})$")
+
+# Confidence decay rules: (days_without_verification, new_confidence)
+CONFIDENCE_DECAY = [
+    (30, "high"),
+    (60, "medium"),
+    (90, "low"),
+    (float("inf"), "outdated"),
+]
+
+# Review intervals by artifact type (days)
+REVIEW_INTERVALS = {
+    "pattern": 90,
+    "adr": 180,
+    "rule": 90,
+    "spec": 60,
+    "incident": 30,
+    "metric": 30,
+}
+
+VALID_CONFIDENCE = {"high", "medium", "low", "outdated"}
+VALID_SOURCES = {"manual", "agent", "owl_agent", "evolve_orchestrator", "insight", "import", "unknown"}
 
 
 def load_all_artifacts() -> dict:
@@ -85,47 +105,21 @@ def verify_artifact(artifact_id: str) -> dict:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     content = fpath.read_text(encoding="utf-8", errors="replace")
-    lines = content.splitlines()
-    new_lines = []
-    in_frontmatter = False
-    had_last_verified = False
-    had_confidence = False
-    had_updated = False
 
-    for i, line in enumerate(lines):
-        if i == 0 and line.strip() == "---":
-            in_frontmatter = True
-            new_lines.append(line)
-            continue
-        if in_frontmatter and line.strip() == "---":
-            in_frontmatter = False
-            if not had_last_verified:
-                new_lines.append(f"last_verified: {now}")
-                had_last_verified = True
-            if not had_confidence:
-                new_lines.append("confidence: high")
-                had_confidence = True
-            if not had_updated:
-                new_lines.append(f"updated: {now}")
-                had_updated = True
-            new_lines.append(line)
-            continue
-        if in_frontmatter:
-            if line.startswith("last_verified:"):
-                new_lines.append(f"last_verified: {now}")
-                had_last_verified = True
-            elif line.startswith("confidence:"):
-                new_lines.append("confidence: high")
-                had_confidence = True
-            elif line.startswith("updated:"):
-                new_lines.append(f"updated: {now}")
-                had_updated = True
-            else:
-                new_lines.append(line)
-        else:
-            new_lines.append(line)
+    # Update last_verified in frontmatter
+    if "last_verified:" in content:
+        content = re.sub(r"^last_verified:.*$", f"last_verified: {now}", content, flags=re.MULTILINE)
+    else:
+        # Add after updated: line
+        content = re.sub(r"^(updated:.*)$", rf"\1\nlast_verified: {now}", content, flags=re.MULTILINE)
 
-    fpath.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    # Reset confidence to high on manual verification
+    if "confidence:" in content:
+        content = re.sub(r"^confidence:.*$", "confidence: high", content, flags=re.MULTILINE)
+    else:
+        content = re.sub(r"^(last_verified:.*)$", rf"\1\nconfidence: high", content, flags=re.MULTILINE)
+
+    fpath.write_text(content, encoding="utf-8")
 
     return {
         "id": artifact_id,
@@ -156,10 +150,9 @@ def refresh_all_provenance() -> dict:
     return {"refreshed": refreshed, "details": details}
 
 
-def generate_report(artifacts: dict | None = None) -> dict:
+def generate_report() -> dict:
     """Generate full provenance report."""
-    if artifacts is None:
-        artifacts = load_all_artifacts()
+    artifacts = load_all_artifacts()
     now = datetime.now(timezone.utc)
 
     by_confidence = defaultdict(list)

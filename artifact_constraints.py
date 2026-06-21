@@ -16,18 +16,21 @@ Usage:
 """
 
 import sys
+import os
 import re
 import json
-from datetime import datetime, timezone
-from collections import defaultdict
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
+from collections import defaultdict, deque
 from config_loader import get_lab_dir, get_artifact_dirs
-from artifact_core import (
-    load_all_artifacts as _canonical_load_all,
-)
-from artifact_constants import REF_PATTERN
+from artifact_core import parse_frontmatter, load_all_artifacts as _canonical_load_all
 
 LAB_DIR = get_lab_dir()
 ARTIFACT_DIRS = get_artifact_dirs()
+
+TEMPLATE_NAMES = {"template", "шаблон", "readme"}
+ID_PATTERN = re.compile(r"\b([A-Z]{2,4}-\d{3,4})\b")
+REF_PATTERN = re.compile(r"\b([A-Z]{2,4}-\d{3,4})\b")
 
 
 def load_all_artifacts() -> dict:
@@ -324,6 +327,7 @@ def auto_fix(artifacts: dict, report: dict, dry_run: bool = True) -> dict:
             continue
 
         if rule == "INC-NO-SEVERITY":
+            fix_desc = f"{aid}: add severity=medium"
             if not dry_run:
                 try:
                     content = fpath.read_text(encoding="utf-8")
@@ -344,6 +348,7 @@ def auto_fix(artifacts: dict, report: dict, dry_run: bool = True) -> dict:
                 fixes.append({"rule": rule, "artifact": aid, "action": "would add severity=medium (dry-run)"})
 
         elif rule == "STALE-INCIDENT":
+            fix_desc = f"{aid}: close stale incident"
             if not dry_run:
                 try:
                     content = fpath.read_text(encoding="utf-8")

@@ -13,30 +13,40 @@ Usage:
 """
 
 import sys
+import os
 import re
 import json
 import subprocess
-from datetime import datetime, timezone
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
 from config_loader import get_lab_dir, get_artifact_dirs
-from artifact_core import load_all_artifacts as _canonical_load_all
-from artifact_constants import (
-    REF_PATTERN,
-    DEFAULT_STALE_DAYS,
-    DEFAULT_ARCHIVE_DAYS,
-)
+from artifact_core import parse_frontmatter, TEMPLATE_NAMES, REF_PATTERN, load_all_artifacts as _canonical_load_all
 
 LAB_DIR = get_lab_dir()
 ARTIFACT_DIRS = get_artifact_dirs()
 
+DEFAULT_STALE_DAYS = 90
+DEFAULT_ARCHIVE_DAYS = 180
 
-def load_all_artifacts() -> dict:
-    return _canonical_load_all(ARTIFACT_DIRS, LAB_DIR)
+
+def load_all_artifacts() -> dict[str, dict]:
+    raw = _canonical_load_all(ARTIFACT_DIRS, LAB_DIR)
+    # Adapt canonical format to aging module's expected structure
+    artifacts = {}
+    for aid, art in raw.items():
+        meta = dict(art["meta"])
+        meta["_file"] = art["file"]
+        meta["_fpath"] = art["fpath"]
+        meta["_body"] = art["body"]
+        meta["_type"] = art["type"]
+        artifacts[aid] = meta
+    return artifacts
 
 
-def count_inbound_links(artifacts: dict) -> dict[str, int]:
+def count_inbound_links(artifacts: dict[str, dict]) -> dict[str, int]:
     inbound = {aid: 0 for aid in artifacts}
-    for aid, art in artifacts.items():
-        body = art.body if hasattr(art, "body") else art.get("body", art.get("_body", ""))
+    for aid, meta in artifacts.items():
+        body = meta.get("_body", "")
         refs = set(REF_PATTERN.findall(body))
         refs.discard(aid)
         for ref in refs:
@@ -45,58 +55,15 @@ def count_inbound_links(artifacts: dict) -> dict[str, int]:
     return inbound
 
 
-def get_inbound_sources(artifacts: dict[str, dict]) -> dict[str, list[str]]:
-    """Return mapping: artifact_id → list of IDs that reference it."""
-    sources: dict[str, list[str]] = {aid: [] for aid in artifacts}
-    for aid, art in artifacts.items():
-        body = art.body if hasattr(art, "body") else art.get("body", art.get("_body", ""))
-        refs = set(REF_PATTERN.findall(body))
-        refs.discard(aid)
-        for ref in refs:
-            if ref in sources:
-                sources[ref].append(aid)
-    return sources
-
-
-def analyze_cascade(artifacts: dict[str, dict], details: list[dict]) -> list[dict]:
-    """For each aging action, list artifacts that reference the target.
-
-    Returns list of cascade entries:
-      [{"target": "ADR-001", "action": "archive", "affected": ["ADR-003", "PAT-002"]}, ...]
-    """
-    sources = get_inbound_sources(artifacts)
-    cascade = []
-    for d in details:
-        affected = sources.get(d["id"], [])
-        if affected:
-            cascade.append({
-                "target": d["id"],
-                "action": d["action"],
-                "affected": sorted(affected),
-            })
-    return cascade
-
-
-def days_since(date_val) -> int:
-    """Compute days since a date value.
-
-    Accepts both str (ISO 8601) and datetime objects.
-    datetime objects come from yaml.safe_load parsing of frontmatter.
-    """
-    if not date_val:
+def days_since(date_str: str) -> int:
+    if not date_str:
         return 9999
     try:
-        if isinstance(date_val, datetime):
-            dt = date_val
-        else:
-            date_str = str(date_val).strip()
-            if not date_str:
-                return 9999
-            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return (datetime.now(timezone.utc) - dt).days
-    except (ValueError, TypeError, AttributeError):
+    except (ValueError, TypeError):
         return 9999
 
 
@@ -113,12 +80,12 @@ def run_aging(dry_run: bool, stale_days: int, archive_days: int) -> dict:
         "details": [],
     }
 
-    for aid, art in artifacts.items():
-        status = str(art.get("status", "")).lower()
-        updated = art.get("updated", art.get("created", ""))
-        created = art.get("created", "")
+    for aid, meta in artifacts.items():
+        status = str(meta.get("status", "")).lower()
+        updated = meta.get("updated", meta.get("created", ""))
+        created = meta.get("created", "")
         inbound_count = inbound[aid]
-        fpath = art.fpath
+        fpath = meta["_fpath"]
         fpath_str = str(fpath.relative_to(LAB_DIR))
 
         results["checked"] += 1
@@ -171,21 +138,15 @@ def run_aging(dry_run: bool, stale_days: int, archive_days: int) -> dict:
                 results["archived"] += 1
 
             if not dry_run:
-                # Обновляем статус только во frontmatter (между --- и ---)
+                # Обновляем статус во frontmatter
                 content = fpath.read_text(encoding="utf-8", errors="replace")
                 new_status = action
-                # Заменяем status только в первом блоке frontmatter
-                fm_match = re.match(r"^(---\s*\n)(.*?)(---)", content, re.DOTALL)
-                if fm_match:
-                    fm_body = fm_match.group(2)
-                    new_fm_body = re.sub(
-                        r"^status:.*$",
-                        f"status: {new_status}",
-                        fm_body,
-                        count=1,
-                        flags=re.MULTILINE,
-                    )
-                    content = fm_match.group(1) + new_fm_body + fm_match.group(3) + content[fm_match.end():]
+                content = re.sub(
+                    r"^status:.*$",
+                    f"status: {new_status}",
+                    content,
+                    flags=re.MULTILINE,
+                )
                 # Добавляем запись об изменении статуса
                 aging_note = f"\n\n## Автоматическое старение\nСтатус изменён на `{new_status}` {now.strftime('%Y-%m-%d')}: "
                 if action == "stale":
@@ -213,7 +174,6 @@ def main():
     args = sys.argv[1:]
     dry_run = "--dry-run" in args
     json_output = "--json" in args
-    cascade = "--cascade" in args
     stale_days = DEFAULT_STALE_DAYS
     archive_days = DEFAULT_ARCHIVE_DAYS
 
@@ -227,17 +187,9 @@ def main():
     print(f"artifact_aging.py — {mode}")
     print(f"  stale threshold: {stale_days} days")
     print(f"  archive threshold: {archive_days} days")
-    if cascade:
-        print("  cascade analysis: ON")
     print()
 
     results = run_aging(dry_run, stale_days, archive_days)
-
-    cascade_results = []
-    if cascade and results["details"]:
-        artifacts = load_all_artifacts()
-        cascade_results = analyze_cascade(artifacts, results["details"])
-        results["cascade"] = cascade_results
 
     if json_output:
         print(json.dumps(results, ensure_ascii=False, indent=2))
@@ -256,12 +208,6 @@ def main():
             print(f"             updated {d['updated_days']}d ago, inbound: {d['inbound']}")
     else:
         print("No aging actions needed.")
-
-    if cascade_results:
-        print()
-        print("Cascade analysis — affected references:")
-        for c in cascade_results:
-            print(f"  {c['action']:<10} {c['target']:<12} → affects: {', '.join(c['affected'])}")
 
 
 if __name__ == "__main__":

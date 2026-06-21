@@ -12,22 +12,46 @@ Usage:
   python3 artifact_graph.py [--format dot|json|html|text] [--output FILE] [--min-links N]
 """
 
+import sys
+import os
+import re
 import json
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, timezone
 from config_loader import get_lab_dir, get_artifact_dirs
-from artifact_core import (
-    load_all_artifacts as _canonical_load_all,
-)
-from artifact_constants import (
-    REF_PATTERN,
-    STATUS_COLORS,
-    TYPE_SHAPES,
-)
+from artifact_core import parse_frontmatter, load_all_artifacts as _canonical_load_all
 
 LAB_DIR = get_lab_dir()
 ARTIFACT_DIRS = get_artifact_dirs()
+
+ID_PATTERN = re.compile(r"\b([A-Z]{2,4}-\d{3,4})\b")
+TEMPLATE_NAMES = {"template", "шаблон", "readme"}
+
+STATUS_COLORS = {
+    "active": "#4CAF50",
+    "accepted": "#2196F3",
+    "proposed": "#FF9800",
+    "draft": "#9E9E9E",
+    "pending": "#9E9E9E",
+    "archived": "#795548",
+    "rejected": "#F44336",
+    "deprecated": "#F44336",
+    "stale": "#FF5722",
+    "consolidated": "#00BCD4",
+    "new": "#CDDC39",
+    "unknown": "#9E9E9E",
+}
+
+TYPE_SHAPES = {
+    "pattern": "box",
+    "adr": "ellipse",
+    "rule": "diamond",
+    "spec": "note",
+    "incident": "octagon",
+    "metric": "hexagon",
+    "backlog": "folder",
+}
 
 
 def _adapt_for_graph(raw: dict) -> dict:
@@ -59,7 +83,7 @@ def build_graph(artifacts: dict) -> dict:
 
     for aid, art in artifacts.items():
         links = set()
-        for m in REF_PATTERN.finditer(art["full_content"]):
+        for m in ID_PATTERN.finditer(art["full_content"]):
             links.add(m.group(1))
         links.discard(aid)
         valid = links & all_ids

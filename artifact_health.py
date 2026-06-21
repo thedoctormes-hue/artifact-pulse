@@ -16,20 +16,14 @@ Usage:
 """
 
 import sys
+import os
+import re
 import json
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from config_loader import get_lab_dir, get_artifact_dirs, get_state_file
-from artifact_core import load_all_artifacts as _canonical_load_all
-from artifact_constants import (
-    ID_PATTERN,
-    REF_PATTERN,
-    ALL_VALID_STATUSES,
-    REQUIRED_FIELDS,
-    DEFAULT_STALE_DAYS,
-    DEFAULT_ARCHIVE_DAYS,
-)
+from artifact_core import parse_frontmatter, load_all_artifacts as _canonical_load_all
 
 LAB_DIR = get_lab_dir()
 ARTIFACT_DIRS = get_artifact_dirs()
@@ -37,6 +31,25 @@ QUEUE_FILE = get_state_file("insights_queue") or LAB_DIR / ".qwen/artifacts/insi
 SEARCH_INDEX_FILE = get_state_file("search_index") or LAB_DIR / ".qwen/artifacts/search_index.json"
 STATS_FILE = get_state_file("artifact_stats") or LAB_DIR / ".qwen/artifacts/artifact_stats.json"
 CHANGELOG_FILE = get_state_file("changelog") or LAB_DIR / "ARTIFACT_CHANGELOG.md"
+
+ID_PATTERN = re.compile(r"^([A-Z]{2,4}-\d{3,4})$")
+REF_PATTERN = re.compile(r"\b([A-Z]{2,4}-\d{3,4})\b")
+TEMPLATE_NAMES = {"template", "шаблон", "readme"}
+
+REQUIRED_FIELDS = {
+    "pattern": ["id", "type", "title", "status", "created"],
+    "adr": ["id", "type", "title", "status", "created"],
+    "rule": ["id", "type", "title", "status", "created"],
+    "spec": ["id", "type", "title", "status", "created"],
+    "incident": ["id", "type", "title", "status", "created"],
+    "metric": ["id", "type", "title", "status", "created"],
+}
+
+VALID_STATUSES = {
+    "active", "accepted", "proposed", "draft", "pending",
+    "archived", "rejected", "deprecated", "stale",
+    "open", "closed", "resolved", "consolidated", "new",
+}
 
 
 def load_all_artifacts() -> dict:
@@ -60,7 +73,7 @@ def check_frontmatter(artifacts: dict) -> dict:
                 errors.append(f"{aid}: missing required field '{field}'")
 
         # Valid status
-        if art["status"] not in ALL_VALID_STATUSES:
+        if art["status"] not in VALID_STATUSES:
             warnings.append(f"{aid}: unknown status '{art['status']}'")
 
         # ID format
@@ -70,13 +83,7 @@ def check_frontmatter(artifacts: dict) -> dict:
         # Created date format
         if art["created"]:
             try:
-                import datetime as _dt
-                if isinstance(art["created"], (_dt.datetime, _dt.date)):
-                    pass  # YAML already parsed it (datetime or date)
-                elif isinstance(art["created"], str):
-                    datetime.fromisoformat(art["created"].replace("+00:00", "+00:00"))
-                else:
-                    errors.append(f"{aid}: unexpected created type {type(art['created']).__name__}")
+                datetime.fromisoformat(art["created"].replace("+00:00", "+00:00"))
             except (ValueError, TypeError):
                 errors.append(f"{aid}: invalid created date '{art['created']}'")
 
@@ -146,8 +153,8 @@ def check_links(artifacts: dict) -> dict:
 def check_aging(artifacts: dict) -> dict:
     """Check for stale artifacts."""
     now = datetime.now(timezone.utc)
-    stale_days = DEFAULT_STALE_DAYS
-    archive_days = DEFAULT_ARCHIVE_DAYS
+    stale_days = 90
+    archive_days = 180
 
     stale = []
     needs_archive = []
@@ -161,17 +168,7 @@ def check_aging(artifacts: dict) -> dict:
             continue
 
         try:
-            import datetime as _dt
-            if isinstance(updated, _dt.datetime):
-                updated_dt = updated
-            elif isinstance(updated, _dt.date):
-                updated_dt = datetime.combine(updated, datetime.min.time(), tzinfo=timezone.utc)
-            elif isinstance(updated, str):
-                updated_dt = datetime.fromisoformat(updated.replace("+00:00", "+00:00"))
-            else:
-                continue
-            if updated_dt.tzinfo is None:
-                updated_dt = updated_dt.replace(tzinfo=timezone.utc)
+            updated_dt = datetime.fromisoformat(str(updated).replace("+00:00", "+00:00"))
             age_days = (now - updated_dt).days
         except (ValueError, TypeError):
             continue
@@ -351,17 +348,7 @@ def check_provenance_dimension(artifacts: dict) -> dict:
         if art.get("last_verified"):
             has_verified += 1
             try:
-                v = art["last_verified"]
-                import datetime as _dt
-                if isinstance(v, _dt.datetime):
-                    v_dt = v
-                elif isinstance(v, _dt.date):
-                    v_dt = datetime.combine(v, datetime.min.time(), tzinfo=timezone.utc)
-                elif isinstance(v, str):
-                    v_dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
-                else:
-                    outdated += 1
-                    continue
+                v_dt = datetime.fromisoformat(art["last_verified"].replace("Z", "+00:00"))
                 if v_dt.tzinfo is None:
                     v_dt = v_dt.replace(tzinfo=timezone.utc)
                 days = (datetime.now(timezone.utc) - v_dt).days
@@ -447,11 +434,11 @@ def format_report(checks: dict, overall: int) -> str:
     status_emoji = "🟢" if overall >= 80 else "🟡" if overall >= 60 else "🔴"
 
     lines = [
-        "═══ ARTIFACT SYSTEM HEALTH CHECK ═══",
+        f"═══ ARTIFACT SYSTEM HEALTH CHECK ═══",
         f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
-        "",
+        f"",
         f"{status_emoji} Overall Health Score: {overall}/100",
-        "",
+        f"",
     ]
 
     # Frontmatter

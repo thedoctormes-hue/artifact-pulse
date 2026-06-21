@@ -9,7 +9,8 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="/root/LabDoctorM/.qwen/scripts"
+SCRIPT_DIR="/root/LabDoctorM/projects/artifact-pulse"
+EVOLVE_SCRIPTS="/root/LabDoctorM/.qwen/scripts"
 LOG_FILE="/root/LabDoctorM/.qwen/artifacts/evolution.log"
 LOCK_FILE="/tmp/self_evolve.lock"
 
@@ -63,7 +64,7 @@ if [[ "$MODE" == "full" ]] || [[ "$MODE" == "consolidate" ]]; then
         SIMILARITY_THRESHOLD=85 \
         REFLECTION_THRESHOLD=3 \
         MAX_REFLECTIONS=3 \
-        bash "$SCRIPT_DIR/insights_consolidator.sh" $DRY_RUN_FLAG 2>&1 | while read line; do
+        bash "$EVOLVE_SCRIPTS/insights_consolidator.sh" $DRY_RUN_FLAG 2>&1 | while read line; do
             log "  consolidate: $line"
         done || log "  consolidate: FAILED (exit $?)"
     else
@@ -92,7 +93,7 @@ else:
     if [[ $PROMOTABLE -gt 0 ]]; then
         log "  → $PROMOTABLE insights ready for artifact creation"
         if [[ -f "$SCRIPT_DIR/evolve_orchestrator.sh" ]]; then
-            DRY_RUN=$DRY_RUN bash "$SCRIPT_DIR/evolve_orchestrator.sh" \
+            DRY_RUN=$DRY_RUN bash "$EVOLVE_SCRIPTS/evolve_orchestrator.sh" \
                 --min-confirmations 2 $DRY_RUN_FLAG 2>&1 | while read line; do
                 log "  evolve: $line"
             done || log "  evolve: FAILED (exit $?)"
@@ -105,7 +106,7 @@ fi
 # ── Шаг 3: Аудит ──────────────────────────────────
 if [[ "$MODE" == "full" ]] || [[ "$MODE" == "audit" ]]; then
     log "── Step 3: Audit ──"
-    SCRIPT_DIR="/root/LabDoctorM/.qwen/scripts"
+    SCRIPT_DIR="/root/LabDoctorM/projects/artifact-pulse"
     if [[ -f "$SCRIPT_DIR/normalize_frontmatter.py" ]]; then
         ERRORS=$(python3 "$SCRIPT_DIR/normalize_frontmatter.py" --check --path /root/LabDoctorM 2>&1 | grep -c "❌" || true)
         log "  Frontmatter errors: $ERRORS"
@@ -181,6 +182,44 @@ if [[ "$MODE" == "full" ]]; then
         python3 "$SCRIPT_DIR/artifact_changelog.py" --generate-changelog --since 7 2>&1 | while read line; do
             log "  changelog: $line"
         done
+    fi
+fi
+
+# ── Шаг 7: Provenance ─────────────────────────────
+if [[ "$MODE" == "full" ]] || [[ "$MODE" == "audit" ]]; then
+    log "── Step 7: Provenance ──"
+    if [[ -f "$SCRIPT_DIR/artifact_provenance.py" ]]; then
+        PROV_SCORE=$(python3 "$SCRIPT_DIR/artifact_provenance.py" 2>&1 | grep "Provenance Score:" | grep -oP '\d+' | head -1)
+        log "  Provenance score: ${PROV_SCORE:-N/A}"
+        if [[ -n "${PROV_SCORE:-}" ]] && [[ "$PROV_SCORE" -lt 80 ]]; then
+            log "  ⚠️  Provenance score below threshold (80)"
+        fi
+    else
+        log "  SKIP: artifact_provenance.py not found"
+    fi
+fi
+
+# ── Шаг 8: Constraints ─────────────────────────────
+if [[ "$MODE" == "full" ]] || [[ "$MODE" == "audit" ]]; then
+    log "── Step 8: Constraints ──"
+    if [[ -f "$SCRIPT_DIR/artifact_constraints.py" ]]; then
+        python3 "$SCRIPT_DIR/artifact_constraints.py" 2>&1 | while read line; do
+            log "  constraints: $line"
+        done
+    else
+        log "  SKIP: artifact_constraints.py not found"
+    fi
+fi
+
+# ── Шаг 9: Monitor snapshot ───────────────────────
+if [[ "$MODE" == "full" ]]; then
+    log "── Step 9: Monitor snapshot ──"
+    if [[ -f "$SCRIPT_DIR/artifact_monitor.py" ]]; then
+        python3 "$SCRIPT_DIR/artifact_monitor.py" 2>&1 | while read line; do
+            log "  monitor: $line"
+        done
+    else
+        log "  SKIP: artifact_monitor.py not found"
     fi
 fi
 
