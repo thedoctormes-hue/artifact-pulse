@@ -4,13 +4,14 @@
 lab_dir: /root/LabDoctorM
 
 # Папки с артефактами (относительно lab_dir)
+# После миграции 21.06.2026 основные артефакты в projects/DoctorM_and_Ai/
 artifact_dirs:
-  pattern: patterns
-  adr: adr
-  rule: rules
-  spec: specs
-  incident: incidents
-  metric: metrics
+  pattern: projects/DoctorM_and_Ai/patterns
+  adr: projects/DoctorM_and_Ai/adr
+  rule: projects/DoctorM_and_Ai/rules
+  spec: projects/DoctorM_and_Ai/docs/specs
+  incident: projects/DoctorM_and_Ai/incidents
+  metric: projects/DoctorM_and_Ai/metrics
 
 # Файлы состояния (относительно lab_dir)
 state_files:
